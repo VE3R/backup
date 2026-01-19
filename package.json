@@ -1,0 +1,8 @@
+{
+  "name": "sociables",
+  "private": true,
+  "workspaces": ["packages/*"],
+  "scripts": {
+    "dev": "npm run dev -w @sociables/web & npm run dev -w @sociables/server"
+  }
+}

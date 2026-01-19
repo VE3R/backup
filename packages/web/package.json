@@ -1,0 +1,25 @@
+{
+  "name": "@sociables/web",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start"
+  },
+  "dependencies": {
+    "autoprefixer": "^10.4.23",
+    "framer-motion": "^12.26.2",
+    "next": "^14.0.0",
+    "postcss": "^8.4.31",
+    "qrcode": "^1.5.4",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "socket.io-client": "^4.7.5",
+    "tailwindcss": "^4.1.18"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.1.18",
+    "@types/react": "19.2.8",
+    "typescript": "5.9.3"
+  }
+}

@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="240" height="240" viewBox="0 0 24 24" shape-rendering="crispEdges">
+  <rect width="24" height="24" fill="none"></rect>
+  <!-- Pixel skull (simple, high-contrast, scalable) -->
+  <g fill="white" opacity="0.95">
+    <!-- top -->
+    <rect x="7" y="3" width="10" height="1"></rect>
+    <rect x="6" y="4" width="12" height="1"></rect>
+    <rect x="5" y="5" width="14" height="1"></rect>
+    <rect x="5" y="6" width="14" height="1"></rect>
+    <rect x="4" y="7" width="16" height="1"></rect>
+    <rect x="4" y="8" width="16" height="1"></rect>
+    <!-- eyes -->
+    <rect x="7" y="9" width="4" height="2" fill="black" opacity="0.9"></rect>
+    <rect x="13" y="9" width="4" height="2" fill="black" opacity="0.9"></rect>
+    <!-- cheekbones -->
+    <rect x="5" y="10" width="2" height="2"></rect>
+    <rect x="17" y="10" width="2" height="2"></rect>
+    <!-- nose -->
+    <rect x="11" y="11" width="2" height="2" fill="black" opacity="0.9"></rect>
+    <!-- jaw -->
+    <rect x="6" y="12" width="12" height="1"></rect>
+    <rect x="6" y="13" width="12" height="1"></rect>
+    <rect x="7" y="14" width="10" height="1"></rect>
+    <rect x="7" y="15" width="10" height="1"></rect>
+    <!-- teeth -->
+    <rect x="8" y="16" width="1" height="2" fill="black" opacity="0.9"></rect>
+    <rect x="10" y="16" width="1" height="2" fill="black" opacity="0.9"></rect>
+    <rect x="12" y="16" width="1" height="2" fill="black" opacity="0.9"></rect>
+    <rect x="14" y="16" width="1" height="2" fill="black" opacity="0.9"></rect>
+    <rect x="16" y="16" width="1" height="2" fill="black" opacity="0.9"></rect>
+  </g>
+</svg>

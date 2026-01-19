@@ -1,0 +1,39 @@
+/* Tailwind v4: this is the correct global import */
+@import "tailwindcss";
+
+/* ---- App baseline ---- */
+html, body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: #050607;
+  color: rgba(255, 255, 255, 0.92);
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial,
+    "Apple Color Emoji", "Segoe UI Emoji";
+}
+
+/* Improve mobile tap responsiveness */
+button, a, input, select, textarea {
+  touch-action: manipulation;
+}
+
+/* Ensure <select> options are readable across mobile UAs */
+select option {
+  background-color: #0b0c0d;
+  color: #ffffff;
+}
+
+/* pixel art rendering */
+.pixelated {
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
+/* focus helper */
+.focus-ring:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.55);
+  outline-offset: 2px;
+  border-radius: 16px;
+}
