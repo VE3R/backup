@@ -657,7 +657,7 @@ adminNamespace.on("connection", (socket) => {
     }
   });
 
-  socket.on("admin:deleteCard", ({ cardId }, cb) => {
+  socket.on("admin:deleteCard", ({ cardId }: { cardId: string }, cb) => {
     if (!customCards.has(cardId)) {
       return cb?.({ error: "Card not found" });
     }
@@ -672,12 +672,12 @@ adminNamespace.on("connection", (socket) => {
     cb?.({ ok: true });
   });
 
-  socket.on("admin:addCardsToRoom", ({ roomCode, cardIds }, cb) => {
+  socket.on("admin:addCardsToRoom", ({ roomCode, cardIds }: { roomCode: string; cardIds: string[] }, cb) => {
     const room = rooms.get(roomCode);
     if (!room) return cb?.({ error: "ROOM_NOT_FOUND" });
     
     const cardsToAdd = cardIds
-      .map(id => customCards.get(id))
+      .map((id: string) => customCards.get(id))
       .filter(Boolean) as Card[];
     
     if (cardsToAdd.length === 0) {
@@ -740,7 +740,7 @@ io.on("connection", (socket) => {
   // ====================
   // PLAYER RECONNECTION
   // ====================
-  socket.on("player:reconnect", ({ roomCode, playerId }, cb) => {
+  socket.on("player:reconnect", ({ roomCode, playerId }: { roomCode: string; playerId: string }, cb) => {
     // Validate inputs
     if (!isValidRoomCode(roomCode)) {
       return cb?.({ error: "INVALID_ROOM_CODE" });
@@ -786,7 +786,7 @@ io.on("connection", (socket) => {
     cb?.({ ok: true, playerId });
   });
 
-  socket.on("room:create", ({ name }, cb) => {
+  socket.on("room:create", ({ name }: { name: string }, cb) => {
     // Validate input
     if (!name || typeof name !== 'string' || name.trim().length === 0) {
       return cb?.({ error: "INVALID_NAME", message: "Name is required" });
@@ -856,7 +856,7 @@ io.on("connection", (socket) => {
     io.to(roomCode).emit("room:state", { room });
   });
 
-  socket.on("room:join", ({ roomCode, name, spectator }, cb) => {
+  socket.on("room:join", ({ roomCode, name, spectator }: { roomCode: string; name: string; spectator?: boolean }, cb) => {
     // Validate inputs
     if (!isValidRoomCode(roomCode)) {
       return cb?.({ error: "INVALID_ROOM_CODE" });
@@ -921,7 +921,7 @@ io.on("connection", (socket) => {
     io.to(roomCode).emit("room:state", { room });
   });
 
-  socket.on("room:sync", ({ roomCode }, cb) => {
+  socket.on("room:sync", ({ roomCode }: { roomCode: string }, cb) => {
     if (!isValidRoomCode(roomCode)) {
       return cb?.({ error: "INVALID_ROOM_CODE" });
     }
@@ -933,7 +933,7 @@ io.on("connection", (socket) => {
     cb?.({ ok: true });
   });
 
-  socket.on("turn:draw", ({ roomCode, playerId }, cb) => {
+  socket.on("turn:draw", ({ roomCode, playerId }: { roomCode: string; playerId: string }, cb) => {
     if (!isValidRoomCode(roomCode) || !isValidPlayerId(playerId)) {
       return cb?.({ error: "INVALID_INPUT" });
     }
@@ -978,7 +978,12 @@ io.on("connection", (socket) => {
     cb?.({ ok: true });
   });
 
-  socket.on("card:resolve", ({ roomCode, playerId, cardId, resolution }, cb) => {
+  socket.on("card:resolve", ({ roomCode, playerId, cardId, resolution }: { 
+    roomCode: string; 
+    playerId: string; 
+    cardId: string; 
+    resolution: any 
+  }, cb) => {
     if (!isValidRoomCode(roomCode) || !isValidPlayerId(playerId) || !cardId) {
       return cb?.({ error: "INVALID_INPUT" });
     }
@@ -1073,7 +1078,11 @@ io.on("connection", (socket) => {
     cb?.({ ok: true });
   });
 
-  socket.on("ack:confirm", ({ roomCode, playerId, ackId }, cb) => {
+  socket.on("ack:confirm", ({ roomCode, playerId, ackId }: { 
+    roomCode: string; 
+    playerId: string; 
+    ackId: string 
+  }, cb) => {
     if (!isValidRoomCode(roomCode) || !isValidPlayerId(playerId) || !ackId) {
       return cb?.({ error: "INVALID_INPUT" });
     }
@@ -1098,7 +1107,11 @@ io.on("connection", (socket) => {
     cb?.({ ok: true });
   });
 
-  socket.on("turn:nudge", ({ roomCode, fromPlayerId, toPlayerId }, cb) => {
+  socket.on("turn:nudge", ({ roomCode, fromPlayerId, toPlayerId }: { 
+    roomCode: string; 
+    fromPlayerId: string; 
+    toPlayerId: string 
+  }, cb) => {
     if (!isValidRoomCode(roomCode) || !isValidPlayerId(fromPlayerId) || !isValidPlayerId(toPlayerId)) {
       return cb?.({ error: "INVALID_INPUT" });
     }
@@ -1113,7 +1126,11 @@ io.on("connection", (socket) => {
     cb?.({ ok: true });
   });
 
-  socket.on("room:updateSettings", ({ roomCode, playerId, patch }, cb) => {
+  socket.on("room:updateSettings", ({ roomCode, playerId, patch }: { 
+    roomCode: string; 
+    playerId: string; 
+    patch: Partial<RoomSettings> 
+  }, cb) => {
     if (!isValidRoomCode(roomCode) || !isValidPlayerId(playerId)) {
       return cb?.({ error: "INVALID_INPUT" });
     }
@@ -1128,7 +1145,11 @@ io.on("connection", (socket) => {
     cb?.({ ok: true });
   });
 
-  socket.on("room:setDeck", ({ roomCode, playerId, deckOrder }, cb) => {
+  socket.on("room:setDeck", ({ roomCode, playerId, deckOrder }: { 
+    roomCode: string; 
+    playerId: string; 
+    deckOrder: string[] 
+  }, cb) => {
     if (!isValidRoomCode(roomCode) || !isValidPlayerId(playerId)) {
       return cb?.({ error: "INVALID_INPUT" });
     }
@@ -1153,7 +1174,10 @@ io.on("connection", (socket) => {
   // HOST CONTROLS
   // ====================
   
-  socket.on("host:kick", ({ roomCode, targetPlayerId }, cb) => {
+  socket.on("host:kick", ({ roomCode, targetPlayerId }: { 
+    roomCode: string; 
+    targetPlayerId: string 
+  }, cb) => {
     if (!isValidRoomCode(roomCode) || !isValidPlayerId(targetPlayerId)) {
       return cb?.({ error: "INVALID_INPUT" });
     }
@@ -1199,7 +1223,7 @@ io.on("connection", (socket) => {
     cb?.({ ok: true });
   });
   
-  socket.on("host:close-room", ({ roomCode }, cb) => {
+  socket.on("host:close-room", ({ roomCode }: { roomCode: string }, cb) => {
     if (!isValidRoomCode(roomCode)) {
       return cb?.({ error: "INVALID_ROOM_CODE" });
     }
