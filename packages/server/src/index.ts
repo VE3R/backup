@@ -26,6 +26,37 @@ type PendingAck = {
   };
 };
 
+type TruthCard = {
+  id: string;
+  category: "spicy" | "funny" | "deep" | "wild" | "relationship" | "would-you-rather";
+  question: string;
+  intensity: 1 | 2 | 3;
+  followUp?: string;
+  tags: string[];
+};
+
+type TruthSession = {
+  id: string;
+  askerId: string;
+  targetId: string;
+  card: TruthCard;
+  status: "asked" | "answered" | "drank" | "skipped";
+  answer?: string;
+  startTime: number;
+  timer?: number;
+};
+
+type RPSChallenge = {
+  id: string;
+  challengerId: string;
+  targetId: string;
+  challengerChoice?: "rock" | "paper" | "scissors";
+  targetChoice?: "rock" | "paper" | "scissors";
+  status: "pending" | "challenger-chose" | "target-chose" | "resolved";
+  winnerId?: string;
+  loserId?: string;
+};
+
 const app = express();
 app.use(cors({ origin: process.env.WEB_ORIGIN || "*" }));
 app.get("/health", (_, res) => res.json({ ok: true }));
@@ -159,6 +190,88 @@ const rooms = new Map<
 >();
 
 const byId = new Map<string, Card>(UltimateDeck.map((c) => [c.id, c]));
+
+// Add this right after: const byId = new Map<string, Card>(UltimateDeck.map((c) => [c.id, c]));
+
+// TRUTH OR DRINK CARDS - Add to main deck
+const TruthOrDrinkCards: Card[] = [
+  {
+    id: "truth_card_001",
+    deck: "ultimate",
+    type: "truth",
+    title: "Truth or Drink",
+    body: "Choose a player. They must answer a truth question or take 2 drinks.",
+    resolution: { kind: "chooseTarget" }
+  },
+  {
+    id: "truth_card_002",
+    deck: "ultimate",
+    type: "truth",
+    title: "Would You Rather",
+    body: "Create a 'Would You Rather' question. Everyone secretly chooses A or B. Minority drinks (if tie, everyone drinks).",
+    resolution: { kind: "createRuleText" }
+  },
+  {
+    id: "truth_card_003",
+    deck: "ultimate",
+    type: "truth",
+    title: "Rock Paper Scissors",
+    body: "Challenge someone to Rock Paper Scissors. Loser takes 2 drinks.",
+    resolution: { kind: "chooseTarget" }
+  }
+];
+
+// Add truth cards to the byId map
+TruthOrDrinkCards.forEach(card => {
+  byId.set(card.id, card);
+});
+
+// Add truth cards to UltimateDeck (so they're in the default deck)
+TruthOrDrinkCards.forEach(card => {
+  if (!UltimateDeck.find(c => c.id === card.id)) {
+    UltimateDeck.push(card);
+  }
+});
+
+// TRUTH QUESTION DATABASE
+const TRUTH_CARDS: TruthCard[] = [
+  // SPICY
+  { id: "truth_001", category: "spicy", question: "What's the most embarrassing thing you've done while drunk?", intensity: 3, tags: ["embarrassing", "drunk"] },
+  { id: "truth_002", category: "spicy", question: "What's the biggest lie you've told to get out of trouble?", intensity: 3, tags: ["lie", "trouble"] },
+  { id: "truth_003", category: "spicy", question: "What's something you've done that you hope your parents never find out about?", intensity: 3, tags: ["parents", "secret"] },
+  
+  // FUNNY
+  { id: "truth_004", category: "funny", question: "If you had to swap lives with someone in this room for a week, who would it be and why?", intensity: 1, tags: ["swap", "room"] },
+  { id: "truth_005", category: "funny", question: "What's the weirdest dream you've ever had?", intensity: 1, tags: ["dream", "weird"] },
+  { id: "truth_006", category: "funny", question: "What's your most ridiculous childhood fear?", intensity: 1, tags: ["childhood", "fear"] },
+  
+  // DEEP
+  { id: "truth_007", category: "deep", question: "What's one thing you wish you could tell your younger self?", intensity: 2, tags: ["advice", "self"] },
+  { id: "truth_008", category: "deep", question: "What's the biggest risk you've taken that paid off?", intensity: 2, tags: ["risk", "success"] },
+  { id: "truth_009", category: "deep", question: "What's something you're secretly proud of but never get to brag about?", intensity: 2, tags: ["proud", "secret"] },
+  
+  // WILD
+  { id: "truth_010", category: "wild", question: "If you had to kiss someone in this room, who would it be?", intensity: 3, tags: ["kiss", "room"] },
+  { id: "truth_011", category: "wild", question: "What's the most inappropriate place you've ever been turned on?", intensity: 3, tags: ["inappropriate", "nsfw"] },
+  { id: "truth_012", category: "wild", question: "What's your weirdest sexual fantasy?", intensity: 3, tags: ["sexual", "fantasy"] },
+  
+  // RELATIONSHIP
+  { id: "truth_013", category: "relationship", question: "What's the biggest red flag you've ignored in a relationship?", intensity: 2, tags: ["relationship", "red-flag"] },
+  { id: "truth_014", category: "relationship", question: "What's the most romantic thing you've ever done for someone?", intensity: 1, tags: ["romantic", "gesture"] },
+  { id: "truth_015", category: "relationship", question: "What's your dealbreaker in a relationship?", intensity: 2, tags: ["dealbreaker", "relationship"] },
+];
+
+// WOULD YOU RATHER EXAMPLES (for inspiration)
+const WOULD_YOU_RATHER_EXAMPLES = [
+  "Never use social media again OR never watch movies/TV again?",
+  "Always be 10 minutes late OR always be 20 minutes early?",
+  "Have a rewind button OR a pause button in your life?",
+  "Live without internet OR live without AC/heating?",
+  "Be able to talk to animals OR speak all human languages?",
+  "Have unlimited money but no friends OR have amazing friends but be poor?",
+  "Know when you'll die OR how you'll die?",
+  "Always have to tell the truth OR always have to lie?",
+];
 
 function playerName(room: any, pid: string) {
   return (
@@ -382,9 +495,218 @@ function createAck(
   };
 }
 
+// Add this after the createAck function
+
+// TRUTH OR DRINK HELPERS
+function getRandomTruthCard(intensity: 1 | 2 | 3 = 2): TruthCard {
+  const cards = TRUTH_CARDS.filter(card => card.intensity === intensity);
+  return cards[Math.floor(Math.random() * cards.length)];
+}
+
+function handleTruthOrDrink(room: any, askerId: string, targetId: string) {
+  // Get random truth card (medium intensity for now)
+  const truthCard = getRandomTruthCard(2);
+  
+  const session: TruthSession = {
+    id: nanoid(),
+    askerId,
+    targetId,
+    card: truthCard,
+    status: "asked",
+    startTime: Date.now(),
+    timer: 30 // 30 seconds to answer
+  };
+  
+  // Store in room state
+  if (!room.truthSessions) room.truthSessions = [];
+  room.truthSessions.push(session);
+  room.currentTruthSession = session.id;
+  
+  // Emit to room
+  io.to(room.roomCode).emit("truth:asked", {
+    session,
+    askerName: playerName(room, askerId),
+    targetName: playerName(room, targetId)
+  });
+  
+  pushLog(room, {
+    type: "truth",
+    text: `${playerName(room, askerId)} asked ${playerName(room, targetId)}: "${truthCard.question}"`,
+    actorId: askerId
+  });
+}
+
+function handleWouldYouRather(room: any, drawerId: string, question: string) {
+  // Parse the would you rather question
+  const parts = question.split(" OR ");
+  if (parts.length !== 2) {
+    // If not formatted correctly, use a default
+    const randomExample = WOULD_YOU_RATHER_EXAMPLES[Math.floor(Math.random() * WOULD_YOU_RATHER_EXAMPLES.length)];
+    const [optionA, optionB] = randomExample.split(" OR ");
+    
+    io.to(room.roomCode).emit("would-you-rather:start", {
+      question: randomExample,
+      optionA,
+      optionB,
+      initiatedBy: playerName(room, drawerId),
+      timer: 20
+    });
+    
+    pushLog(room, {
+      type: "truth",
+      text: `${playerName(room, drawerId)} asked: ${randomExample}`,
+      actorId: drawerId
+    });
+  } else {
+    const [optionA, optionB] = parts.map(p => p.trim());
+    
+    io.to(room.roomCode).emit("would-you-rather:start", {
+      question,
+      optionA,
+      optionB,
+      initiatedBy: playerName(room, drawerId),
+      timer: 20
+    });
+    
+    pushLog(room, {
+      type: "truth",
+      text: `${playerName(room, drawerId)} asked: ${question}`,
+      actorId: drawerId
+    });
+  }
+}
+
+function handleRockPaperScissors(room: any, challengerId: string, targetId: string) {
+  const challenge: RPSChallenge = {
+    id: nanoid(),
+    challengerId,
+    targetId,
+    status: "pending"
+  };
+  
+  if (!room.rpsChallenges) room.rpsChallenges = [];
+  room.rpsChallenges.push(challenge);
+  room.currentRPSChallenge = challenge.id;
+  
+  io.to(room.roomCode).emit("rps:challenge", {
+    challenge,
+    challengerName: playerName(room, challengerId),
+    targetName: playerName(room, targetId)
+  });
+  
+  pushLog(room, {
+    type: "rps",
+    text: `${playerName(room, challengerId)} challenged ${playerName(room, targetId)} to Rock Paper Scissors!`,
+    actorId: challengerId
+  });
+}
+
+function resolveRPS(challenge: RPSChallenge, room: any) {
+  if (!challenge.challengerChoice || !challenge.targetChoice) return;
+  
+  const choices = {
+    rock: { beats: "scissors", losesTo: "paper" },
+    paper: { beats: "rock", losesTo: "scissors" },
+    scissors: { beats: "paper", losesTo: "rock" }
+  };
+  
+  if (challenge.challengerChoice === challenge.targetChoice) {
+    // Tie - both drink 1
+    challenge.winnerId = undefined;
+    challenge.loserId = undefined;
+    challenge.status = "resolved";
+    
+    applyDrinksDirectly(room, challenge.challengerId, 1);
+    applyDrinksDirectly(room, challenge.targetId, 1);
+    
+    io.to(room.roomCode).emit("rps:result", {
+      challenge,
+      result: "tie",
+      message: `${playerName(room, challenge.challengerId)} and ${playerName(room, challenge.targetId)} tied! Both drink 1.`
+    });
+    
+    pushLog(room, {
+      type: "rps",
+      text: `Rock Paper Scissors: ${playerName(room, challenge.challengerId)} and ${playerName(room, challenge.targetId)} tied! Both drink 1.`,
+      actorId: "system"
+    });
+  } else if (choices[challenge.challengerChoice].beats === challenge.targetChoice) {
+    // Challenger wins
+    challenge.winnerId = challenge.challengerId;
+    challenge.loserId = challenge.targetId;
+    challenge.status = "resolved";
+    
+    applyDrinksDirectly(room, challenge.targetId, 2);
+    
+    io.to(room.roomCode).emit("rps:result", {
+      challenge,
+      result: "challenger-wins",
+      message: `${playerName(room, challenge.challengerId)} wins! ${playerName(room, challenge.targetId)} drinks 2.`
+    });
+    
+    pushLog(room, {
+      type: "rps",
+      text: `Rock Paper Scissors: ${playerName(room, challenge.challengerId)} beat ${playerName(room, challenge.targetId)}! Loser drinks 2.`,
+      actorId: challenge.challengerId
+    });
+  } else {
+    // Target wins
+    challenge.winnerId = challenge.targetId;
+    challenge.loserId = challenge.challengerId;
+    challenge.status = "resolved";
+    
+    applyDrinksDirectly(room, challenge.challengerId, 2);
+    
+    io.to(room.roomCode).emit("rps:result", {
+      challenge,
+      result: "target-wins",
+      message: `${playerName(room, challenge.targetId)} wins! ${playerName(room, challenge.challengerId)} drinks 2.`
+    });
+    
+    pushLog(room, {
+      type: "rps",
+      text: `Rock Paper Scissors: ${playerName(room, challenge.targetId)} beat ${playerName(room, challenge.challengerId)}! Loser drinks 2.`,
+      actorId: challenge.targetId
+    });
+  }
+}
+
+function applyDrinksDirectly(room: any, playerId: string, count: number) {
+  ensurePlayerStats(room, playerId);
+  room.drinkStats[playerId].taken += count;
+  
+  // Update drink stats for all players
+  const allPlayerIds = [...room.players.map((p: any) => p.playerId), ...room.spectators.map((s: any) => s.playerId)];
+  allPlayerIds.forEach(pid => {
+    ensurePlayerStats(room, pid);
+  });
+}
+
 function applyCard(room: RoomState, card: Card, byPlayerId: string, resolution: any) {
   const title = card.title.toLowerCase();
-
+	if (card.type === "truth") {
+	  const title = card.title.toLowerCase();
+	  
+	  if (title.includes("truth or drink")) {
+		const target = resolution.targetPlayerId;
+		handleTruthOrDrink(room, byPlayerId, target);
+		return `Truth or Drink: ${playerName(room, target)} must answer or drink.`;
+	  }
+	  
+	  if (title.includes("would you rather")) {
+		const question = String(resolution.ruleText || "").trim();
+		handleWouldYouRather(room, byPlayerId, question);
+		return `Would You Rather: ${question}`;
+	  }
+	  
+	  if (title.includes("rock paper scissors")) {
+		const target = resolution.targetPlayerId;
+		handleRockPaperScissors(room, byPlayerId, target);
+		return `Rock Paper Scissors: ${playerName(room, byPlayerId)} vs ${playerName(room, target)}`;
+	  }
+	}
+  
+  
   if (title.includes("cleanse curse")) {
     const target = resolution.targetPlayerId;
     delete room.activeEffects.cursesByPlayerId[target];
@@ -440,6 +762,7 @@ function applyCard(room: RoomState, card: Card, byPlayerId: string, resolution: 
     room.activeEffects.currentEvent = { id: card.id, title: card.title };
     return `${card.title} is active.`;
   }
+  
 
   return `Resolved: ${card.title}`;
 }
@@ -1252,6 +1575,190 @@ io.on("connection", (socket) => {
     
     cb?.({ ok: true });
   });
+  socket.on("truth:answer", ({ roomCode, sessionId, answer }: { 
+  roomCode: string; 
+  sessionId: string; 
+  answer: string 
+}, cb) => {
+  const room = rooms.get(roomCode);
+  if (!room) return cb?.({ error: "ROOM_NOT_FOUND" });
+  
+  const session = room.truthSessions?.find((s: TruthSession) => s.id === sessionId);
+  if (!session) return cb?.({ error: "SESSION_NOT_FOUND" });
+  
+  // Check if this player is the target
+  const playerInfo = socketToPlayer.get(socket.id);
+  if (!playerInfo || playerInfo.playerId !== session.targetId) {
+    return cb?.({ error: "NOT_YOUR_TRUTH" });
+  }
+  
+  session.status = "answered";
+  session.answer = answer;
+  room.currentTruthSession = null;
+  
+  pushLog(room, {
+    type: "truth",
+    text: `${playerName(room, session.targetId)} answered: "${answer}"`,
+    actorId: session.targetId
+  });
+  
+  io.to(roomCode).emit("truth:answered", {
+    session,
+    answer
+  });
+  
+  updateRoomActivity(roomCode);
+  cb?.({ ok: true });
+});
+
+socket.on("truth:drink", ({ roomCode, sessionId }: { 
+  roomCode: string; 
+  sessionId: string 
+}, cb) => {
+  const room = rooms.get(roomCode);
+  if (!room) return cb?.({ error: "ROOM_NOT_FOUND" });
+  
+  const session = room.truthSessions?.find((s: TruthSession) => s.id === sessionId);
+  if (!session) return cb?.({ error: "SESSION_NOT_FOUND" });
+  
+  // Check if this player is the target
+  const playerInfo = socketToPlayer.get(socket.id);
+  if (!playerInfo || playerInfo.playerId !== session.targetId) {
+    return cb?.({ error: "NOT_YOUR_TRUTH" });
+  }
+  
+  session.status = "drank";
+  room.currentTruthSession = null;
+  
+  // Apply 2 drinks for choosing to drink
+  applyDrinksDirectly(room, session.targetId, 2);
+  
+  pushLog(room, {
+    type: "truth",
+    text: `${playerName(room, session.targetId)} chose to drink instead of answering.`,
+    actorId: session.targetId
+  });
+  
+  io.to(roomCode).emit("truth:drank", {
+    session,
+    message: `${playerName(room, session.targetId)} chose to drink!`
+  });
+  
+  updateRoomActivity(roomCode);
+  cb?.({ ok: true });
+});
+
+socket.on("would-you-rather:vote", ({ roomCode, option }: { 
+  roomCode: string; 
+  option: "A" | "B" 
+}, cb) => {
+  const room = rooms.get(roomCode);
+  if (!room) return cb?.({ error: "ROOM_NOT_FOUND" });
+  
+  const playerInfo = socketToPlayer.get(socket.id);
+  if (!playerInfo) return cb?.({ error: "PLAYER_NOT_FOUND" });
+  
+  if (!room.wyrVotes) room.wyrVotes = {};
+  room.wyrVotes[playerInfo.playerId] = option;
+  
+  // Check if everyone has voted
+  const activePlayers = room.players.filter((p: any) => p.connected);
+  if (Object.keys(room.wyrVotes).length === activePlayers.length) {
+    // Calculate results
+    const votes = Object.values(room.wyrVotes) as ("A" | "B")[];
+    const aCount = votes.filter(v => v === "A").length;
+    const bCount = votes.filter(v => v === "B").length;
+    
+    let message = "";
+    if (aCount === bCount) {
+      // Tie - everyone drinks 1
+      activePlayers.forEach((player: any) => {
+        applyDrinksDirectly(room, player.playerId, 1);
+      });
+      message = `Tie! ${aCount} votes each. Everyone drinks 1!`;
+    } else if (aCount > bCount) {
+      // A is majority, B drinks 2
+      const minorityPlayers = activePlayers.filter((p: any) => room.wyrVotes[p.playerId] === "B");
+      minorityPlayers.forEach((player: any) => {
+        applyDrinksDirectly(room, player.playerId, 2);
+      });
+      message = `Option A wins ${aCount}-${bCount}. ${minorityPlayers.length} people drink 2!`;
+    } else {
+      // B is majority, A drinks 2
+      const minorityPlayers = activePlayers.filter((p: any) => room.wyrVotes[p.playerId] === "A");
+      minorityPlayers.forEach((player: any) => {
+        applyDrinksDirectly(room, player.playerId, 2);
+      });
+      message = `Option B wins ${bCount}-${aCount}. ${minorityPlayers.length} people drink 2!`;
+    }
+    
+    // Clear votes
+    delete room.wyrVotes;
+    
+    io.to(roomCode).emit("would-you-rather:result", {
+      aCount,
+      bCount,
+      message
+    });
+    
+    pushLog(room, {
+      type: "truth",
+      text: message,
+      actorId: "system"
+    });
+  }
+  
+  updateRoomActivity(roomCode);
+  cb?.({ ok: true });
+});
+
+socket.on("rps:choose", ({ roomCode, challengeId, choice }: { 
+  roomCode: string; 
+  challengeId: string; 
+  choice: "rock" | "paper" | "scissors" 
+}, cb) => {
+  const room = rooms.get(roomCode);
+  if (!room) return cb?.({ error: "ROOM_NOT_FOUND" });
+  
+  const challenge = room.rpsChallenges?.find((c: RPSChallenge) => c.id === challengeId);
+  if (!challenge) return cb?.({ error: "CHALLENGE_NOT_FOUND" });
+  
+  const playerInfo = socketToPlayer.get(socket.id);
+  if (!playerInfo) return cb?.({ error: "PLAYER_NOT_FOUND" });
+  
+  // Check if player is in this challenge
+  if (playerInfo.playerId !== challenge.challengerId && playerInfo.playerId !== challenge.targetId) {
+    return cb?.({ error: "NOT_IN_CHALLENGE" });
+  }
+  
+  // Set choice based on who is choosing
+  if (playerInfo.playerId === challenge.challengerId) {
+    challenge.challengerChoice = choice;
+    if (challenge.status === "pending") challenge.status = "challenger-chose";
+  } else {
+    challenge.targetChoice = choice;
+    if (challenge.status === "challenger-chose") challenge.status = "target-chose";
+  }
+  
+  // Notify room of choice
+  io.to(roomCode).emit("rps:choice-made", {
+    challengeId,
+    playerId: playerInfo.playerId,
+    playerName: playerName(room, playerInfo.playerId),
+    choice
+  });
+  
+  // If both have chosen, resolve
+  if (challenge.challengerChoice && challenge.targetChoice) {
+    resolveRPS(challenge, room);
+    room.currentRPSChallenge = null;
+  }
+  
+  updateRoomActivity(roomCode);
+  cb?.({ ok: true });
+});
+  
+  
 
   // ====================
   // DISCONNECT HANDLER

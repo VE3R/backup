@@ -29,6 +29,44 @@ type PendingAck = {
   status: "pending" | "confirmed";
 };
 
+// ====================
+// TRUTH OR DRINK TYPES
+// ====================
+type TruthSession = {
+  id: string;
+  askerId: string;
+  targetId: string;
+  card: {
+    id: string;
+    question: string;
+    intensity: 1 | 2 | 3;
+    category: string;
+  };
+  status: "asked" | "answered" | "drank" | "skipped";
+  answer?: string;
+  startTime: number;
+  timer?: number;
+};
+
+type WouldYouRatherSession = {
+  question: string;
+  optionA: string;
+  optionB: string;
+  initiatedBy: string;
+  timer: number;
+};
+
+type RPSChallenge = {
+  id: string;
+  challengerId: string;
+  targetId: string;
+  challengerChoice?: "rock" | "paper" | "scissors";
+  targetChoice?: "rock" | "paper" | "scissors";
+  status: "pending" | "challenger-chose" | "target-chose" | "resolved";
+  winnerId?: string;
+  loserId?: string;
+};
+
 const CARD_HELP: Record<string, string> = {
   "Question Master":
     "While you're Question Master, anyone who answers a question you ask must drink. Avoid answering questions yourself.",
@@ -45,6 +83,15 @@ const CARD_HELP: Record<string, string> = {
     "The active player chooses someone to drink twice. If you're chosen, take 2 drinks and tap Confirm.",
   "Give 2 Drinks":
     "The active player chooses someone to drink twice. If you're chosen, take 2 drinks and tap Confirm."
+	// Add these entries to the CARD_HELP object (after line 52)
+
+  // NEW: Truth or Drink Cards
+  "Truth or Drink":
+    "Choose a player. They must answer a truth question or take 2 drinks.",
+  "Would You Rather":
+    "Create a 'Would You Rather' question. Everyone secretly chooses A or B. Minority drinks (if tie, everyone drinks).",
+  "Rock Paper Scissors":
+    "Challenge someone to Rock Paper Scissors. Loser takes 2 drinks."
 };
 
 function explainFor(title: string) {
@@ -133,6 +180,11 @@ export default function RoomPage() {
   // QR Join
   const [qrOpen, setQrOpen] = useState(false);
   const [qrDataUrl, setQrDataUrl] = useState<string>("");
+  
+  const [currentTruthSession, setCurrentTruthSession] = useState<TruthSession | null>(null);
+  const [currentWouldYouRather, setCurrentWouldYouRather] = useState<WouldYouRatherSession | null>(null);
+  const [currentRPSChallenge, setCurrentRPSChallenge] = useState<RPSChallenge | null>(null);
+  const [truthAnswerInput, setTruthAnswerInput] = useState<string>("");
 
   // visible flip delay
   const flipDelayMs = 520;
@@ -229,6 +281,14 @@ export default function RoomPage() {
     socket.on("card:drawn", onDrawn);
     socket.on("effect:applied", onEffect);
     socket.on("player:nudged", onNudged);
+	socket.on("truth:asked", onTruthAsked);
+    socket.on("truth:answered", onTruthAnswered);
+    socket.on("truth:drank", onTruthDrank);
+    socket.on("would-you-rather:start", onWouldYouRatherStart);
+    socket.on("would-you-rather:result", onWouldYouRatherResult);
+    socket.on("rps:challenge", onRPSChallenge);
+    socket.on("rps:choice-made", onRPSChoiceMade);
+    socket.on("rps:result", onRPSResult);
 	
 	socket.on("kicked", (data: any) => {
 		toast({ 
@@ -268,6 +328,14 @@ export default function RoomPage() {
       socket.off("player:nudged", onNudged);
 	  socket.off("kicked");
 	  socket.off("room:closed");
+      socket.off("truth:asked", onTruthAsked);
+      socket.off("truth:answered", onTruthAnswered);
+      socket.off("truth:drank", onTruthDrank);
+      socket.off("would-you-rather:start", onWouldYouRatherStart);
+      socket.off("would-you-rather:result", onWouldYouRatherResult);
+      socket.off("rps:challenge", onRPSChallenge);
+      socket.off("rps:choice-made", onRPSChoiceMade);
+      socket.off("rps:result", onRPSResult);
     };
   }, [code, toast]);
 
@@ -280,6 +348,76 @@ export default function RoomPage() {
     if (!room?.players) return null;
     return room.players.find((p: any) => p.seatIndex === room.turnIndex) || null;
   }, [room]);
+  
+      const onTruthAsked = (data: any) => {
+      console.log("🔍 Truth asked:", data);
+      setCurrentTruthSession(data.session);
+    };
+
+    const onTruthAnswered = (data: any) => {
+      console.log("🔍 Truth answered:", data);
+      setCurrentTruthSession(null);
+      toast({ 
+        kind: "info", 
+        title: "Truth Answered", 
+        message: `${data.session.targetId === playerId ? "You" : "Someone"} answered a truth question.` 
+      });
+    };
+
+    const onTruthDrank = (data: any) => {
+      console.log("🔍 Player drank instead:", data);
+      setCurrentTruthSession(null);
+      toast({ 
+        kind: "warning", 
+        title: "Drank Instead", 
+        message: `${data.session.targetId === playerId ? "You" : "Someone"} chose to drink instead of answering.` 
+      });
+    };
+
+    const onWouldYouRatherStart = (data: any) => {
+      console.log("🔍 Would You Rather:", data);
+      setCurrentWouldYouRather(data);
+    };
+
+    const onWouldYouRatherResult = (data: any) => {
+      console.log("🔍 WYR Result:", data);
+      setCurrentWouldYouRather(null);
+      toast({ 
+        kind: data.aCount === data.bCount ? "warning" : "info", 
+        title: "Would You Rather Result", 
+        message: data.message 
+      });
+    };
+
+    const onRPSChallenge = (data: any) => {
+      console.log("🔍 RPS Challenge:", data);
+      setCurrentRPSChallenge(data.challenge);
+    };
+
+    const onRPSChoiceMade = (data: any) => {
+      console.log("🔍 RPS choice made:", data);
+      if (currentRPSChallenge) {
+        const updatedChallenge = { ...currentRPSChallenge };
+        if (data.playerId === updatedChallenge.challengerId) {
+          updatedChallenge.challengerChoice = data.choice;
+          updatedChallenge.status = "challenger-chose";
+        } else if (data.playerId === updatedChallenge.targetId) {
+          updatedChallenge.targetChoice = data.choice;
+          updatedChallenge.status = "target-chose";
+        }
+        setCurrentRPSChallenge(updatedChallenge);
+      }
+    };
+
+    const onRPSResult = (data: any) => {
+      console.log("🔍 RPS result:", data);
+      setCurrentRPSChallenge(null);
+      toast({ 
+        kind: data.result === "tie" ? "warning" : "info", 
+        title: "Rock Paper Scissors Result", 
+        message: data.message 
+      });
+    };
 
   const me = useMemo(() => {
     if (!room?.players || !playerId) return null;
@@ -997,7 +1135,41 @@ export default function RoomPage() {
           </motion.div>
         )}
       </AnimatePresence>
+      {/* ==================== */}
+      {/* TRUTH OR DRINK MODALS */}
+      {/* ==================== */}
+      
+      {/* Truth or Drink Modal */}
+      {currentTruthSession && (
+        <TruthOrDrinkModal
+          session={currentTruthSession}
+          playerId={playerId || ""}
+          roomCode={code}
+          onClose={() => setCurrentTruthSession(null)}
+        />
+      )}
 
+      {/* Would You Rather Modal */}
+      {currentWouldYouRather && (
+        <WouldYouRatherModal
+          session={currentWouldYouRather}
+          playerId={playerId || ""}
+          roomCode={code}
+          onClose={() => setCurrentWouldYouRather(null)}
+        />
+      )}
+
+      {/* Rock Paper Scissors Modal */}
+      {currentRPSChallenge && room && (
+        <RPSModal
+          challenge={currentRPSChallenge}
+          playerId={playerId || ""}
+          roomCode={code}
+          challengerName={getPlayerNameById(room, currentRPSChallenge.challengerId)}
+          targetName={getPlayerNameById(room, currentRPSChallenge.targetId)}
+          onClose={() => setCurrentRPSChallenge(null)}
+        />
+      )}
       <ResolveModal
         open={resolverOpen}
         onClose={() => setResolverOpen(false)}
@@ -1453,4 +1625,578 @@ export default function RoomPage() {
       </div>
     </BrandShell>
   );
+	function TruthOrDrinkModal({ 
+	  session, 
+	  playerId, 
+	  roomCode, 
+	  onClose 
+	}: { 
+	  session: TruthSession; 
+	  playerId: string; 
+	  roomCode: string; 
+	  onClose: () => void 
+	}) {
+	  const [answer, setAnswer] = useState("");
+	  const [timeLeft, setTimeLeft] = useState(session.timer || 30);
+	  const socket = getSocket();
+	  
+	  useEffect(() => {
+		const timer = setInterval(() => {
+		  setTimeLeft(prev => {
+			if (prev <= 1) {
+			  clearInterval(timer);
+			  if (playerId === session.targetId) {
+				socket.emit("truth:drink", { roomCode, sessionId: session.id });
+				onClose();
+			  }
+			  return 0;
+			}
+			return prev - 1;
+		  });
+		}, 1000);
+		
+		return () => clearInterval(timer);
+	  }, []);
+	  
+	  const handleAnswer = () => {
+		if (answer.trim()) {
+		  socket.emit("truth:answer", { roomCode, sessionId: session.id, answer });
+		  onClose();
+		}
+	  };
+	  
+	  const handleDrink = () => {
+		socket.emit("truth:drink", { roomCode, sessionId: session.id });
+		onClose();
+	  };
+	  
+	  if (playerId === session.targetId) {
+		return (
+		  <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
+			<div className="modal truth-modal">
+			  <h2>Truth or Drink! ⏱️ {timeLeft}s</h2>
+			  <p className="truth-question">"{session.card.question}"</p>
+			  <textarea
+				value={answer}
+				onChange={(e) => setAnswer(e.target.value)}
+				placeholder="Your answer..."
+				rows={3}
+				className="truth-textarea"
+			  />
+			  <div className="truth-buttons">
+				<button onClick={handleAnswer} className="btn-truth">
+				  🗣️ Answer Truthfully
+				</button>
+				<button onClick={handleDrink} className="btn-drink">
+				  🍻 Take 2 Drinks Instead
+				</button>
+			  </div>
+			</div>
+		  </div>
+		);
+	  }
+	  
+	  return (
+		<div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
+		  <div className="modal truth-modal spectator">
+			<h2>Truth or Drink!</h2>
+			<p><strong>{session.targetId === playerId ? "You" : "Another player"}</strong> has been asked:</p>
+			<p className="truth-question">"{session.card.question}"</p>
+			<p>Waiting for response... {timeLeft}s</p>
+		  </div>
+		</div>
+	  );
+	}
+
+	function WouldYouRatherModal({
+	  session,
+	  playerId,
+	  roomCode,
+	  onClose
+	}: {
+	  session: WouldYouRatherSession;
+	  playerId: string;
+	  roomCode: string;
+	  onClose: () => void
+	}) {
+	  const [selected, setSelected] = useState<'A' | 'B' | null>(null);
+	  const socket = getSocket();
+	  
+	  const handleVote = (option: 'A' | 'B') => {
+		setSelected(option);
+		socket.emit("would-you-rather:vote", { roomCode, option });
+		onClose();
+	  };
+	  
+	  const questionParts = session.question.split(" OR ");
+	  const optionA = questionParts[0]?.trim() || session.optionA;
+	  const optionB = questionParts[1]?.trim() || session.optionB;
+	  
+	  return (
+		<div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
+		  <div className="modal wyr-modal">
+			<h2>Would You Rather</h2>
+			<p className="initiated-by">Asked by: {session.initiatedBy}</p>
+			<p className="wyr-question">{session.question}</p>
+			
+			<div className="wyr-options">
+			  <button 
+				onClick={() => handleVote('A')} 
+				className={`wyr-option ${selected === 'A' ? 'selected' : ''}`}
+				disabled={selected !== null}
+			  >
+				<div className="wyr-letter">A</div>
+				<div className="wyr-text">{optionA}</div>
+			  </button>
+			  
+			  <div className="wyr-or">OR</div>
+			  
+			  <button 
+				onClick={() => handleVote('B')} 
+				className={`wyr-option ${selected === 'B' ? 'selected' : ''}`}
+				disabled={selected !== null}
+			  >
+				<div className="wyr-letter">B</div>
+				<div className="wyr-text">{optionB}</div>
+			  </button>
+			</div>
+			
+			<p className="wyr-instruction">
+			  {selected 
+				? "Vote submitted! Waiting for others..." 
+				: "Minority drinks 2! (If tie, everyone drinks 1)"}
+			</p>
+			
+			{session.timer > 0 && (
+			  <p className="wyr-timer">⏱️ {session.timer}s remaining</p>
+			)}
+		  </div>
+		</div>
+	  );
+	}
+
+	function RPSModal({
+	  challenge,
+	  playerId,
+	  roomCode,
+	  challengerName,
+	  targetName,
+	  onClose
+	}: {
+	  challenge: RPSChallenge;
+	  playerId: string;
+	  roomCode: string;
+	  challengerName: string;
+	  targetName: string;
+	  onClose: () => void
+	}) {
+	  const [choice, setChoice] = useState<'rock' | 'paper' | 'scissors' | null>(null);
+	  const socket = getSocket();
+	  
+	  const isChallenger = playerId === challenge.challengerId;
+	  const isTarget = playerId === challenge.targetId;
+	  const isParticipant = isChallenger || isTarget;
+	  
+	  const handleChoice = (selected: 'rock' | 'paper' | 'scissors') => {
+		if (!isParticipant) return;
+		
+		setChoice(selected);
+		socket.emit("rps:choose", { 
+		  roomCode, 
+		  challengeId: challenge.id, 
+		  choice: selected 
+		});
+	  };
+	  
+	  const choices = [
+		{ id: 'rock' as const, emoji: '✊', label: 'Rock' },
+		{ id: 'paper' as const, emoji: '✋', label: 'Paper' },
+		{ id: 'scissors' as const, emoji: '✌️', label: 'Scissors' }
+	  ];
+	  
+	  if (!isParticipant) {
+		return (
+		  <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
+			<div className="modal rps-modal spectator">
+			  <h2>Rock Paper Scissors! 🪨📄✂️</h2>
+			  <p><strong>{challengerName}</strong> vs <strong>{targetName}</strong></p>
+			  <div className="rps-choices-display">
+				{choices.map((c) => (
+				  <div key={c.id} className="rps-choice-display">
+					<span className="rps-emoji">{c.emoji}</span>
+					<span>{c.label}</span>
+				  </div>
+				))}
+			  </div>
+			  <p>Waiting for players to choose...</p>
+			</div>
+		  </div>
+		);
+	  }
+	  
+	  return (
+		<div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
+		  <div className="modal rps-modal">
+			<h2>Rock Paper Scissors! 🪨📄✂️</h2>
+			<p>You're playing against {isChallenger ? targetName : challengerName}</p>
+			<p className="rps-stakes">Loser drinks 2! 🍻🍻</p>
+			
+			<div className="rps-choices">
+			  {choices.map((c) => (
+				<button
+				  key={c.id}
+				  onClick={() => handleChoice(c.id)}
+				  className={`rps-choice-btn ${choice === c.id ? 'selected' : ''}`}
+				  disabled={choice !== null || challenge.status !== "pending"}
+				>
+				  <span className="rps-emoji-big">{c.emoji}</span>
+				  <span className="rps-label">{c.label}</span>
+				</button>
+			  ))}
+			</div>
+			
+			{choice && (
+			  <p className="rps-waiting">
+				You chose: {choice} - Waiting for opponent...
+			  </p>
+			)}
+			
+			{(challenge.status === "challenger-chose" || challenge.status === "target-chose") && !choice && (
+			  <p className="rps-waiting">
+				Opponent has chosen! Make your selection.
+			  </p>
+			)}
+		  </div>
+		</div>
+	  );
+	}
+
+	// Helper function to get player name by ID
+	function getPlayerNameById(room: any, id: string): string {
+	  const player = room?.players?.find((p: any) => p.playerId === id);
+	  const spectator = room?.spectators?.find((s: any) => s.playerId === id);
+	  return player?.name || spectator?.name || id;
+	}
+	// ADD THIS AT THE VERY END OF THE FILE, right before the final closing `}`
+
+// CSS Styles for Truth or Drink modals
+<style jsx global>{`
+  /* Truth or Drink Modal Styles */
+  .modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.7);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 9999;
+    padding: 20px;
+  }
+
+  .modal {
+    background: white;
+    padding: 2rem;
+    border-radius: 16px;
+    max-width: 500px;
+    width: 100%;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+    animation: modalAppear 0.3s ease-out;
+  }
+
+  @keyframes modalAppear {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  /* Truth Modal */
+  .truth-modal h2 {
+    color: #d32f2f;
+    margin-bottom: 1rem;
+    font-size: 1.8rem;
+  }
+
+  .truth-question {
+    font-size: 1.3rem;
+    font-style: italic;
+    margin: 1.5rem 0;
+    padding: 1.5rem;
+    background: #f8f9fa;
+    border-radius: 12px;
+    border-left: 4px solid #d32f2f;
+    line-height: 1.5;
+  }
+
+  .truth-textarea {
+    width: 100%;
+    padding: 1rem;
+    border: 2px solid #ddd;
+    border-radius: 8px;
+    font-size: 1rem;
+    margin: 1rem 0;
+    resize: vertical;
+    min-height: 100px;
+    font-family: inherit;
+  }
+
+  .truth-textarea:focus {
+    outline: none;
+    border-color: #d32f2f;
+  }
+
+  .truth-buttons {
+    display: flex;
+    gap: 1rem;
+    margin-top: 1.5rem;
+  }
+
+  .btn-truth, .btn-drink {
+    flex: 1;
+    padding: 1rem 1.5rem;
+    border: none;
+    border-radius: 10px;
+    font-size: 1.1rem;
+    font-weight: bold;
+    cursor: pointer;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+  }
+
+  .btn-truth {
+    background: #4CAF50;
+    color: white;
+  }
+
+  .btn-truth:hover {
+    background: #388E3C;
+    transform: translateY(-2px);
+  }
+
+  .btn-drink {
+    background: #f44336;
+    color: white;
+  }
+
+  .btn-drink:hover {
+    background: #d32f2f;
+    transform: translateY(-2px);
+  }
+
+  .truth-modal.spectator .truth-question {
+    border-left-color: #666;
+  }
+
+  /* Would You Rather Modal */
+  .wyr-modal h2 {
+    color: #2196F3;
+    margin-bottom: 0.5rem;
+  }
+
+  .initiated-by {
+    color: #666;
+    font-size: 0.9rem;
+    margin-bottom: 1.5rem;
+  }
+
+  .wyr-question {
+    font-size: 1.4rem;
+    font-weight: bold;
+    margin: 1.5rem 0;
+    text-align: center;
+    line-height: 1.4;
+  }
+
+  .wyr-options {
+    margin: 2rem 0;
+  }
+
+  .wyr-option {
+    display: block;
+    width: 100%;
+    padding: 1.5rem;
+    margin: 1rem 0;
+    border: 3px solid #ddd;
+    border-radius: 12px;
+    background: white;
+    cursor: pointer;
+    text-align: left;
+    transition: all 0.3s;
+    position: relative;
+  }
+
+  .wyr-option:hover {
+    border-color: #2196F3;
+    background: #f1f8ff;
+    transform: translateX(5px);
+  }
+
+  .wyr-option.selected {
+    border-color: #2196F3;
+    background: #e3f2fd;
+  }
+
+  .wyr-option:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
+  }
+
+  .wyr-letter {
+    display: inline-block;
+    width: 36px;
+    height: 36px;
+    background: #2196F3;
+    color: white;
+    border-radius: 50%;
+    text-align: center;
+    line-height: 36px;
+    margin-right: 1rem;
+    font-weight: bold;
+    font-size: 1.2rem;
+  }
+
+  .wyr-text {
+    display: inline;
+    font-size: 1.1rem;
+    vertical-align: middle;
+  }
+
+  .wyr-or {
+    text-align: center;
+    margin: 1rem 0;
+    font-weight: bold;
+    font-size: 1.2rem;
+    color: #666;
+    position: relative;
+  }
+
+  .wyr-or:before, .wyr-or:after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    width: 40%;
+    height: 2px;
+    background: #ddd;
+  }
+
+  .wyr-or:before { left: 0; }
+  .wyr-or:after { right: 0; }
+
+  .wyr-instruction {
+    text-align: center;
+    color: #666;
+    font-size: 0.9rem;
+    margin-top: 1.5rem;
+    padding: 0.5rem;
+    background: #f5f5f5;
+    border-radius: 6px;
+  }
+
+  .wyr-timer {
+    text-align: center;
+    color: #ff9800;
+    font-weight: bold;
+    margin-top: 0.5rem;
+    animation: pulse 1.5s infinite;
+  }
+
+  @keyframes pulse {
+    0% { opacity: 1; }
+    50% { opacity: 0.6; }
+    100% { opacity: 1; }
+  }
+
+  /* Rock Paper Scissors Modal */
+  .rps-modal h2 {
+    color: #9C27B0;
+    margin-bottom: 0.5rem;
+    text-align: center;
+  }
+
+  .rps-stakes {
+    text-align: center;
+    font-size: 1.3rem;
+    color: #f44336;
+    font-weight: bold;
+    margin: 1rem 0;
+  }
+
+  .rps-choices {
+    display: flex;
+    gap: 1rem;
+    margin: 2rem 0;
+    justify-content: center;
+  }
+
+  .rps-choice-btn {
+    padding: 1.5rem;
+    border: 3px solid #9C27B0;
+    border-radius: 12px;
+    background: white;
+    color: #9C27B0;
+    font-size: 1.2rem;
+    cursor: pointer;
+    transition: all 0.2s;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.5rem;
+    min-width: 100px;
+  }
+
+  .rps-choice-btn:hover {
+    background: #f3e5f5;
+    transform: scale(1.05);
+  }
+
+  .rps-choice-btn.selected {
+    background: #9C27B0;
+    color: white;
+  }
+
+  .rps-choice-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none;
+  }
+
+  .rps-emoji-big {
+    font-size: 2.5rem;
+    display: block;
+  }
+
+  .rps-label {
+    font-weight: bold;
+  }
+
+  .rps-waiting {
+    text-align: center;
+    color: #666;
+    margin-top: 1rem;
+    font-style: italic;
+  }
+
+  /* Spectator view for RPS */
+  .rps-modal.spectator .rps-choices-display {
+    display: flex;
+    justify-content: center;
+    gap: 2rem;
+    margin: 2rem 0;
+  }
+
+  .rps-choice-display {
+    text-align: center;
+    padding: 1rem;
+  }
+
+  .rps-emoji {
+    font-size: 2rem;
+    display: block;
+    margin-bottom: 0.5rem;
+  }
+`}</style>
 }
