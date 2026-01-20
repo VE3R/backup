@@ -100,6 +100,13 @@ export default function RoomPage() {
   // flip/anim state
   const [faceUp, setFaceUp] = useState(false);
   const [animating, setAnimating] = useState(false);
+  
+  // Kick declarations
+  const [kickConfirmOpen, setKickConfirmOpen] = useState(false);
+  const [playerToKick, setPlayerToKick] = useState<{playerId: string; name: string} | null>(null);
+  
+  // Close room
+  const [closeRoomConfirmOpen, setCloseRoomConfirmOpen] = useState(false);
 
   // feed
   const [feed, setFeed] = useState<string | null>(null);
@@ -654,19 +661,9 @@ export default function RoomPage() {
 						<button
 						  type="button"
 						  onClick={() => {
-							if (window.confirm(`Kick ${p.name} from the room?`)) {
-							  const socket = getSocket();
-							  socket.emit("host:kick", { 
-								roomCode: room.roomCode, 
-								targetPlayerId: p.playerId 
-							  }, (res: any) => {
-								if (res?.error) {
-								  toast({ kind: "error", title: "Kick failed", message: String(res.error) });
-								} else {
-								  toast({ kind: "success", title: "Player kicked", message: `${p.name} was removed.` });
-								}
-							  });
-							}
+							sfx.click();
+							setPlayerToKick({ playerId: p.playerId, name: p.name });
+							setKickConfirmOpen(true);
 						  }}
 						  className="rounded-xl border border-red-500/30 bg-red-500/20 px-3 py-1.5 text-xs font-semibold text-red-300 hover:bg-red-500/30 active:scale-[0.98] transition"
 						>
@@ -684,24 +681,187 @@ export default function RoomPage() {
 				})}
 			  </div>
 			  
+		{/* Kick Confirmation Modal */}
+		<AnimatePresence>
+		  {kickConfirmOpen && playerToKick && (
+			<motion.div
+			  className="fixed inset-0 z-[9999] flex items-center justify-center p-4"
+			  initial={{ opacity: 0 }}
+			  animate={{ opacity: 1 }}
+			  exit={{ opacity: 0 }}
+			>
+			  <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={() => setKickConfirmOpen(false)} />
+			  <motion.div
+				className="relative w-full max-w-md rounded-3xl border border-white/15 bg-black/80 p-5 shadow-[0_40px_120px_rgba(0,0,0,0.8)]"
+				initial={{ y: 18, scale: 0.98, opacity: 0 }}
+				animate={{ y: 0, scale: 1, opacity: 1 }}
+				exit={{ y: 18, scale: 0.98, opacity: 0 }}
+				transition={{ type: "spring", stiffness: 520, damping: 40 }}
+				onClick={(e) => e.stopPropagation()}
+			  >
+				<div className="flex items-start justify-between gap-4 mb-4">
+				  <div>
+					<div className="text-xl font-semibold">Kick Player</div>
+					<div className="text-sm text-white/60 mt-1">Remove player from the room</div>
+				  </div>
+				  <button
+					type="button"
+					className="rounded-2xl border border-white/15 bg-white/5 px-3 py-2 text-xs text-white/75 hover:bg-white/10 active:scale-[0.98]"
+					onClick={() => setKickConfirmOpen(false)}
+				  >
+					Cancel
+				  </button>
+				</div>
+
+				<div className="rounded-2xl border border-white/10 bg-white/5 p-4 mb-5">
+				  <div className="flex items-center gap-3">
+					<div className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center">
+					  <span className="text-lg">👤</span>
+					</div>
+					<div>
+					  <div className="font-semibold">{playerToKick.name}</div>
+					  <div className="text-xs text-white/60">Will be removed from the game</div>
+					</div>
+				  </div>
+				</div>
+
+				<div className="text-sm text-white/75 mb-5 leading-relaxed">
+				  This player will be immediately removed from the room and won't be able to rejoin unless invited again.
+				</div>
+
+				<div className="grid grid-cols-2 gap-3">
+				  <button
+					type="button"
+					className="rounded-2xl border border-white/15 bg-white/5 px-4 py-3 font-semibold hover:bg-white/10 active:scale-[0.98] transition"
+					onClick={() => setKickConfirmOpen(false)}
+				  >
+					Cancel
+				  </button>
+				  <button
+					type="button"
+					className="rounded-2xl border border-red-500/40 bg-red-500/20 px-4 py-3 font-semibold text-red-300 hover:bg-red-500/30 active:scale-[0.98] transition"
+					onClick={() => {
+					  if (!room || !playerId || !playerToKick) return;
+					  
+					  const socket = getSocket();
+					  sfx.click();
+					  
+					  socket.emit("host:kick", { 
+						roomCode: room.roomCode, 
+						targetPlayerId: playerToKick.playerId 
+					  }, (res: any) => {
+						if (res?.error) {
+						  sfx.error();
+						  toast({ kind: "error", title: "Kick failed", message: String(res.error) });
+						} else {
+						  sfx.confirm();
+						  toast({ kind: "success", title: "Player kicked", message: `${playerToKick.name} was removed.` });
+						}
+						setKickConfirmOpen(false);
+						setPlayerToKick(null);
+					  });
+					}}
+				  >
+					Confirm Kick
+				  </button>
+				</div>
+			  </motion.div>
+			</motion.div>
+		  )}
+		</AnimatePresence>
+		
+		{/* Close Room Confirmation Modal */}
+		<AnimatePresence>
+		  {closeRoomConfirmOpen && (
+			<motion.div
+			  className="fixed inset-0 z-[9999] flex items-center justify-center p-4"
+			  initial={{ opacity: 0 }}
+			  animate={{ opacity: 1 }}
+			  exit={{ opacity: 0 }}
+			>
+			  <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={() => setCloseRoomConfirmOpen(false)} />
+			  <motion.div
+				className="relative w-full max-w-md rounded-3xl border border-white/15 bg-black/80 p-5 shadow-[0_40px_120px_rgba(0,0,0,0.8)]"
+				initial={{ y: 18, scale: 0.98, opacity: 0 }}
+				animate={{ y: 0, scale: 1, opacity: 1 }}
+				exit={{ y: 18, scale: 0.98, opacity: 0 }}
+				transition={{ type: "spring", stiffness: 520, damping: 40 }}
+				onClick={(e) => e.stopPropagation()}
+			  >
+				<div className="flex items-start justify-between gap-4 mb-4">
+				  <div>
+					<div className="text-xl font-semibold">Close Room</div>
+					<div className="text-sm text-white/60 mt-1">End the game for everyone</div>
+				  </div>
+				  <button
+					type="button"
+					className="rounded-2xl border border-white/15 bg-white/5 px-3 py-2 text-xs text-white/75 hover:bg-white/10 active:scale-[0.98]"
+					onClick={() => setCloseRoomConfirmOpen(false)}
+				  >
+					Cancel
+				  </button>
+				</div>
+
+				<div className="rounded-2xl border border-red-500/20 bg-red-500/10 p-4 mb-5">
+				  <div className="flex items-center gap-3">
+					<div className="w-10 h-10 rounded-full bg-red-500/20 flex items-center justify-center">
+					  <span className="text-lg">⚠️</span>
+					</div>
+					<div>
+					  <div className="font-semibold text-red-300">This will end the game</div>
+					  <div className="text-xs text-red-300/70">All players will be disconnected</div>
+					</div>
+				  </div>
+				</div>
+
+				<div className="text-sm text-white/75 mb-5 leading-relaxed">
+				  Closing the room will immediately end the game for all {room?.players?.length || 0} player{room?.players?.length !== 1 ? 's' : ''}. 
+				  The room code will become invalid and everyone will be returned to the home page.
+				</div>
+
+				<div className="grid grid-cols-2 gap-3">
+				  <button
+					type="button"
+					className="rounded-2xl border border-white/15 bg-white/5 px-4 py-3 font-semibold hover:bg-white/10 active:scale-[0.98] transition"
+					onClick={() => setCloseRoomConfirmOpen(false)}
+				  >
+					Cancel
+				  </button>
+				  <button
+					type="button"
+					className="rounded-2xl border border-red-500/40 bg-red-500/20 px-4 py-3 font-semibold text-red-300 hover:bg-red-500/30 active:scale-[0.98] transition"
+					onClick={() => {
+					  const socket = getSocket();
+					  sfx.click();
+					  socket.emit("host:close-room", { roomCode: room.roomCode }, (res: any) => {
+						if (res?.error) {
+						  sfx.error();
+						  toast({ kind: "error", title: "Failed", message: String(res.error) });
+						}
+						setCloseRoomConfirmOpen(false);
+					  });
+					}}
+				  >
+					Close Room
+				  </button>
+				</div>
+			  </motion.div>
+			</motion.div>
+		  )}
+		</AnimatePresence>
+			  
 			  {/* Close Room Button */}
 			  <div className="mt-4 pt-3 border-t border-white/10">
 				<button
-				  type="button"
-				  onClick={() => {
-					if (window.confirm("Close this room? This will end the game for everyone.")) {
-					  const socket = getSocket();
-					  socket.emit("host:close-room", { roomCode: room.roomCode }, (res: any) => {
-						if (res?.error) {
-						  toast({ kind: "error", title: "Failed", message: String(res.error) });
-						}
-					  });
-					}
-				  }}
-				  className="w-full rounded-xl border border-red-500/40 bg-red-500/20 px-4 py-3 text-sm font-semibold text-red-300 hover:bg-red-500/30 active:scale-[0.98] transition"
-				>
-				  Close Room (End Game)
-				</button>
+					  type="button"
+					  onClick={() => {
+						sfx.click();
+						setCloseRoomConfirmOpen(true);
+					  }}
+					  className="w-full rounded-xl border border-red-500/40 bg-red-500/20 px-4 py-3 text-sm font-semibold text-red-300 hover:bg-red-500/30 active:scale-[0.98] transition"
+					>
+					  Close Room (End Game)
+					</button>
 				<div className="mt-1 text-xs text-white/60 text-center">
 				  This ends the game for all players
 				</div>
