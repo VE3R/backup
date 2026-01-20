@@ -1,6 +1,6 @@
 // TruthOrDrinkModal.tsx
 import React, { useState, useEffect } from 'react';
-import { socket } from './socket';
+import { getSocket } from '../../lib/socket'; // Fixed import
 
 interface TruthOrDrinkModalProps {
   roomCode: string;

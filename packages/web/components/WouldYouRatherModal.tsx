@@ -1,6 +1,6 @@
 // WouldYouRatherModal.tsx
 import React, { useState } from 'react';
-import { socket } from './socket';
+import { getSocket } from '../../lib/socket'; // Fixed import
 
 interface WouldYouRatherModalProps {
   roomCode: string;
