@@ -7,7 +7,22 @@ import { Button, Panel, PanelBody, Tag } from "../components/UI";
 import { useToast } from "../components/ToastProvider";
 import { sfx } from "../lib/sfx";
 import { getServerBase } from "../lib/socket";
-import type { Card } from "@sociables/shared";
+
+type Card = {
+  id: string;
+  deck: "ultimate";
+  type: "forfeit" | "rule" | "role" | "curse" | "event" | "joker" | "setup" | "endgame";
+  title: string;
+  body: string;
+  resolution: {
+    kind: "none" | "chooseTarget" | "chooseNumber" | "chooseTargetAndNumber" | "chooseTwoTargets" | "createRuleText";
+    min?: number;
+    max?: number;
+    numMin?: number;
+    numMax?: number;
+    maxLen?: number;
+  };
+};
 
 type RoomPlayer = {
   id: string;
