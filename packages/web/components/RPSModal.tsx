@@ -1,6 +1,6 @@
 // RPSModal.tsx
 import React, { useState } from 'react';
-import { getSocket } from '../../lib/socket'; // Fixed import
+import { getSocket } from '../lib/socket'; // Go up one level
 
 interface RPSModalProps {
   roomCode: string;
