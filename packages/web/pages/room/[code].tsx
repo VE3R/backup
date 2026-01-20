@@ -222,6 +222,28 @@ export default function RoomPage() {
     socket.on("card:drawn", onDrawn);
     socket.on("effect:applied", onEffect);
     socket.on("player:nudged", onNudged);
+	
+	socket.on("kicked", (data: any) => {
+		toast({ 
+		  kind: "error", 
+		  title: "Kicked", 
+		  message: data?.message || "You were kicked from the room" 
+		});
+		setTimeout(() => {
+		  router.push("/");
+		}, 2000);
+	  });
+
+	  socket.on("room:closed", (data: any) => {
+		toast({ 
+		  kind: "info", 
+		  title: "Room Closed", 
+		  message: data?.message || "The room has been closed" 
+		});
+		setTimeout(() => {
+		  router.push("/");
+		}, 2000);
+	  });
 
     socket.emit("room:sync", { roomCode: code }, (res: any) => {
       if (res?.error) toast({ kind: "error", title: "Sync failed", message: String(res.error) });
@@ -237,6 +259,8 @@ export default function RoomPage() {
       socket.off("card:drawn", onDrawn);
       socket.off("effect:applied", onEffect);
       socket.off("player:nudged", onNudged);
+	  socket.off("kicked");
+	  socket.off("room:closed");
     };
   }, [code, toast]);
 
@@ -332,6 +356,27 @@ export default function RoomPage() {
 
     return { ok: true, resolution: {} };
   };
+  const kickPlayer = (targetPlayerId: string, targetPlayerName: string) => {
+  if (!room || !playerId) return;
+  
+  if (!window.confirm(`Kick ${targetPlayerName} from the room?`)) {
+    return;
+  }
+  
+  const socket = getSocket();
+  sfx.click();
+  
+  socket.emit("host:kick", { roomCode: room.roomCode, targetPlayerId }, (res: any) => {
+    if (res?.error) {
+      sfx.error();
+      toast({ kind: "error", title: "Kick failed", message: String(res.error) });
+    } else {
+      toast({ kind: "success", title: "Player kicked", message: `${targetPlayerName} was removed from the room.` });
+    }
+  });
+};
+  
+ 
 
   const resolve = () => {
     if (!room || !playerId || !card) return;
@@ -577,82 +622,166 @@ export default function RoomPage() {
                 </button>
               </div>
 
-              {!isHost ? (
-                <div className="mt-4 text-sm text-white/70">Only the host can change settings.</div>
-              ) : (
-                <div className="mt-4 space-y-3">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    <button
-                      type="button"
-                      className="rounded-2xl border border-white/10 bg-white/5 px-3 py-3 text-left hover:bg-white/10"
-                      onClick={() => patchSettings({ safeMode: !room?.settings?.safeMode })}
-                    >
-                      <div className="text-sm font-semibold">Safe Mode</div>
-                      <div className="text-xs text-white/60">Softens drink-heavy cards in stats + weighting.</div>
-                      <div className="mt-1 text-xs text-white/70">{room?.settings?.safeMode ? "ON" : "OFF"}</div>
-                    </button>
+		{!isHost ? (
+		  <div className="mt-4 text-sm text-white/70">Only the host can change settings.</div>
+		) : (
+		  <div className="mt-4 space-y-3">
+			{/* ========== ADD PLAYER MANAGEMENT SECTION HERE ========== */}
+			<div className="rounded-2xl border border-white/10 bg-black/30 p-4">
+			  <div className="text-sm font-semibold mb-3">Player Management</div>
+			  <div className="space-y-2">
+				{playersSorted.map((p: any) => {
+				  const isCurrentPlayer = p.playerId === playerId;
+				  const isPlayerHost = p.seatIndex === 0;
+				  
+				  return (
+					<div 
+					  key={p.playerId} 
+					  className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/5 p-3"
+					>
+					  <div className="min-w-0">
+						<div className="font-semibold truncate">
+						  {p.name}
+						  {isCurrentPlayer && <span className="text-white/60 ml-2">(you)</span>}
+						  {isPlayerHost && <span className="text-white/60 ml-2">(host)</span>}
+						</div>
+						<div className="text-xs text-white/60">
+						  Seat {p.seatIndex + 1} • {p.connected ? "Online" : "Offline"}
+						</div>
+					  </div>
+					  
+					  {!isPlayerHost && !isCurrentPlayer && (
+						<button
+						  type="button"
+						  onClick={() => {
+							if (window.confirm(`Kick ${p.name} from the room?`)) {
+							  const socket = getSocket();
+							  socket.emit("host:kick", { 
+								roomCode: room.roomCode, 
+								targetPlayerId: p.playerId 
+							  }, (res: any) => {
+								if (res?.error) {
+								  toast({ kind: "error", title: "Kick failed", message: String(res.error) });
+								} else {
+								  toast({ kind: "success", title: "Player kicked", message: `${p.name} was removed.` });
+								}
+							  });
+							}
+						  }}
+						  className="rounded-xl border border-red-500/30 bg-red-500/20 px-3 py-1.5 text-xs font-semibold text-red-300 hover:bg-red-500/30 active:scale-[0.98] transition"
+						>
+						  Kick
+						</button>
+					  )}
+					  
+					  {(isPlayerHost || isCurrentPlayer) && (
+						<div className="rounded-xl border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-white/40">
+						  {isPlayerHost ? "Host" : "You"}
+						</div>
+					  )}
+					</div>
+				  );
+				})}
+			  </div>
+			  
+			  {/* Close Room Button */}
+			  <div className="mt-4 pt-3 border-t border-white/10">
+				<button
+				  type="button"
+				  onClick={() => {
+					if (window.confirm("Close this room? This will end the game for everyone.")) {
+					  const socket = getSocket();
+					  socket.emit("host:close-room", { roomCode: room.roomCode }, (res: any) => {
+						if (res?.error) {
+						  toast({ kind: "error", title: "Failed", message: String(res.error) });
+						}
+					  });
+					}
+				  }}
+				  className="w-full rounded-xl border border-red-500/40 bg-red-500/20 px-4 py-3 text-sm font-semibold text-red-300 hover:bg-red-500/30 active:scale-[0.98] transition"
+				>
+				  Close Room (End Game)
+				</button>
+				<div className="mt-1 text-xs text-white/60 text-center">
+				  This ends the game for all players
+				</div>
+			  </div>
+			</div>
+			{/* ========== END PLAYER MANAGEMENT SECTION ========== */}
 
-                    <button
-                      type="button"
-                      className="rounded-2xl border border-white/10 bg-white/5 px-3 py-3 text-left hover:bg-white/10"
-                      onClick={() => patchSettings({ dynamicWeighting: !room?.settings?.dynamicWeighting })}
-                    >
-                      <div className="text-sm font-semibold">Dynamic Weighting</div>
-                      <div className="text-xs text-white/60">Reduces repeats and balances card types.</div>
-                      <div className="mt-1 text-xs text-white/70">{room?.settings?.dynamicWeighting ? "ON" : "OFF"}</div>
-                    </button>
+			{/* KEEP ALL EXISTING SETTINGS CONTROLS BELOW - DON'T TOUCH THESE */}
+			<div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+			  <button
+				type="button"
+				className="rounded-2xl border border-white/10 bg-white/5 px-3 py-3 text-left hover:bg-white/10"
+				onClick={() => patchSettings({ safeMode: !room?.settings?.safeMode })}
+			  >
+				<div className="text-sm font-semibold">Safe Mode</div>
+				<div className="text-xs text-white/60">Softens drink-heavy cards in stats + weighting.</div>
+				<div className="mt-1 text-xs text-white/70">{room?.settings?.safeMode ? "ON" : "OFF"}</div>
+			  </button>
 
-                    <button
-                      type="button"
-                      className="rounded-2xl border border-white/10 bg-white/5 px-3 py-3 text-left hover:bg-white/10"
-                      onClick={() => patchSettings({ sfx: !room?.settings?.sfx })}
-                    >
-                      <div className="text-sm font-semibold">Sound Effects</div>
-                      <div className="text-xs text-white/60">Clicks, flips, confirms.</div>
-                      <div className="mt-1 text-xs text-white/70">{room?.settings?.sfx ? "ON" : "OFF"}</div>
-                    </button>
+			  <button
+				type="button"
+				className="rounded-2xl border border-white/10 bg-white/5 px-3 py-3 text-left hover:bg-white/10"
+				onClick={() => patchSettings({ dynamicWeighting: !room?.settings?.dynamicWeighting })}
+			  >
+				<div className="text-sm font-semibold">Dynamic Weighting</div>
+				<div className="text-xs text-white/60">Reduces repeats and balances card types.</div>
+				<div className="mt-1 text-xs text-white/70">{room?.settings?.dynamicWeighting ? "ON" : "OFF"}</div>
+			  </button>
 
-                    <button
-                      type="button"
-                      className="rounded-2xl border border-white/10 bg-white/5 px-3 py-3 text-left hover:bg-white/10"
-                      onClick={() => patchSettings({ haptics: !room?.settings?.haptics })}
-                    >
-                      <div className="text-sm font-semibold">Haptics</div>
-                      <div className="text-xs text-white/60">Mobile vibration for nudges.</div>
-                      <div className="mt-1 text-xs text-white/70">{room?.settings?.haptics ? "ON" : "OFF"}</div>
-                    </button>
-                  </div>
+			  <button
+				type="button"
+				className="rounded-2xl border border-white/10 bg-white/5 px-3 py-3 text-left hover:bg-white/10"
+				onClick={() => patchSettings({ sfx: !room?.settings?.sfx })}
+			  >
+				<div className="text-sm font-semibold">Sound Effects</div>
+				<div className="text-xs text-white/60">Clicks, flips, confirms.</div>
+				<div className="mt-1 text-xs text-white/70">{room?.settings?.sfx ? "ON" : "OFF"}</div>
+			  </button>
 
-                  <div className="rounded-2xl border border-white/10 bg-black/30 p-3">
-                    <div className="text-sm font-semibold">Theme</div>
-                    <div className="mt-2 grid grid-cols-2 md:grid-cols-4 gap-2">
-                      {(["obsidian", "wood", "neon", "dungeon"] as const).map((t) => (
-                        <button
-                          key={t}
-                          type="button"
-                          className={
-                            "rounded-xl border px-3 py-2 text-xs capitalize hover:bg-white/10 " +
-                            (room?.settings?.theme === t ? "border-white/30 bg-white/10" : "border-white/10 bg-white/5")
-                          }
-                          onClick={() => patchSettings({ theme: t })}
-                        >
-                          {t}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
+			  <button
+				type="button"
+				className="rounded-2xl border border-white/10 bg-white/5 px-3 py-3 text-left hover:bg-white/10"
+				onClick={() => patchSettings({ haptics: !room?.settings?.haptics })}
+			  >
+				<div className="text-sm font-semibold">Haptics</div>
+				<div className="text-xs text-white/60">Mobile vibration for nudges.</div>
+				<div className="mt-1 text-xs text-white/70">{room?.settings?.haptics ? "ON" : "OFF"}</div>
+			  </button>
+			</div>
 
-                  <div className="grid grid-cols-2 gap-3">
-                    <Button variant="secondary" onClick={() => setDeckOpen(true)}>
-                      Import Deck
-                    </Button>
-                    <Button variant="secondary" onClick={() => copyText(JSON.stringify({ deckOrder: room?.settings?.customDeckOrder || room.deckOrder }), "Deck JSON copied")}
-                    >
-                      Export Deck
-                    </Button>
-                  </div>
-                </div>
-              )}
+			<div className="rounded-2xl border border-white/10 bg-black/30 p-3">
+			  <div className="text-sm font-semibold">Theme</div>
+			  <div className="mt-2 grid grid-cols-2 md:grid-cols-4 gap-2">
+				{(["obsidian", "wood", "neon", "dungeon"] as const).map((t) => (
+				  <button
+					key={t}
+					type="button"
+					className={
+					  "rounded-xl border px-3 py-2 text-xs capitalize hover:bg-white/10 " +
+					  (room?.settings?.theme === t ? "border-white/30 bg-white/10" : "border-white/10 bg-white/5")
+					}
+					onClick={() => patchSettings({ theme: t })}
+				  >
+					{t}
+				  </button>
+				))}
+			  </div>
+			</div>
+
+			<div className="grid grid-cols-2 gap-3">
+			  <Button variant="secondary" onClick={() => setDeckOpen(true)}>
+				Import Deck
+			  </Button>
+			  <Button variant="secondary" onClick={() => copyText(JSON.stringify({ deckOrder: room?.settings?.customDeckOrder || room.deckOrder }), "Deck JSON copied")}
+			  >
+				Export Deck
+			  </Button>
+			</div>
+		  </div>
+		)}
             </motion.div>
           </motion.div>
         )}
