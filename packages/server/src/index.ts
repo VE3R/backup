@@ -686,6 +686,105 @@ adminNamespace.on("connection", (socket) => {
   socket.on("disconnect", () => {
     console.log(`[ADMIN] Admin disconnected: ${socket.id}`);
   });
+  
+	  // ====================
+	// CARD MANAGEMENT SYSTEM
+	// ====================
+
+	// Store custom cards (in production, you'd want to persist this)
+	const customCards = new Map<string, Card>();
+
+	// Initialize with some default custom cards if you want
+	// customCards.set("custom-1", { ... });
+
+	// Add these handlers in the adminNamespace.on("connection", ...) section:
+
+	// Get all cards (default + custom)
+	socket.on("admin:getCards", (cb) => {
+	  const allCards = Array.from(byId.values()); // Default cards
+	  const customCardList = Array.from(customCards.values());
+	  cb?.({ default: allCards, custom: customCardList });
+	});
+
+	// Create/Update custom card
+	socket.on("admin:saveCard", (cardData: any, cb) => {
+	  try {
+		// Generate ID if not provided
+		const cardId = cardData.id || `custom-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+		
+		const newCard: Card = {
+		  id: cardId,
+		  deck: "ultimate",
+		  type: cardData.type || "forfeit",
+		  title: cardData.title || "Custom Card",
+		  body: cardData.body || "Custom card description",
+		  resolution: cardData.resolution || { kind: "none" }
+		};
+		
+		customCards.set(cardId, newCard);
+		
+		// Notify all admins
+		adminNamespace.emit("admin:cardUpdated", { 
+		  action: cardData.id ? "updated" : "created", 
+		  card: newCard 
+		});
+		
+		cb?.({ ok: true, card: newCard });
+	  } catch (error) {
+		console.error("[ADMIN] Error saving card:", error);
+		cb?.({ error: "Failed to save card" });
+	  }
+	});
+
+	// Delete custom card
+	socket.on("admin:deleteCard", ({ cardId }, cb) => {
+	  if (!customCards.has(cardId)) {
+		return cb?.({ error: "Card not found" });
+	  }
+	  
+	  customCards.delete(cardId);
+	  
+	  // Notify all admins
+	  adminNamespace.emit("admin:cardUpdated", { 
+		action: "deleted", 
+		cardId 
+	  });
+	  
+	  cb?.({ ok: true });
+	});
+
+	// Add custom cards to the deck for specific rooms
+	socket.on("admin:addCardsToRoom", ({ roomCode, cardIds }, cb) => {
+	  const room = rooms.get(roomCode);
+	  if (!room) return cb?.({ error: "ROOM_NOT_FOUND" });
+	  
+	  const cardsToAdd = cardIds
+		.map(id => customCards.get(id))
+		.filter(Boolean) as Card[];
+	  
+	  if (cardsToAdd.length === 0) {
+		return cb?.({ error: "No valid cards found" });
+	  }
+	  
+	  // Add to room's custom deck order
+	  const customDeckOrder = room.settings.customDeckOrder || room.deckOrder;
+	  const newCardIds = cardsToAdd.map(card => card.id);
+	  room.settings.customDeckOrder = [...customDeckOrder, ...newCardIds];
+	  
+	  // Update the byId map so these cards can be drawn
+	  cardsToAdd.forEach(card => {
+		byId.set(card.id, card);
+	  });
+	  
+	  pushLog(room, {
+		type: "deck",
+		text: `Admin added ${cardsToAdd.length} custom cards to the deck.`,
+		actorId: "admin"
+	  });
+	  
+	  io.to(roomCode).emit("room:state", { room });
+	  cb?.({ ok: true, added: cardsToAdd.length });
+	});
 });
 
 // Helper function to notify all admins of room updates
@@ -716,6 +815,7 @@ function notifyAdminsOfRoomUpdate() {
   
   adminNamespace.emit("admin:rooms", allRooms);
 }
+
 
 io.on("connection", (socket) => {
   socket.on("room:create", ({ name }, cb) => {
