@@ -494,6 +494,229 @@ setInterval(() => {
   }
 }, 500);
 
+// ====================
+// ADMIN SOCKET NAMESPACE
+// ====================
+const ADMIN_KEY = process.env.ADMIN_KEY || "default_admin_key_change_me";
+
+const adminNamespace = io.of("/admin");
+
+adminNamespace.use((socket, next) => {
+  const providedKey = socket.handshake.auth.adminKey;
+  if (providedKey === ADMIN_KEY) {
+    next();
+  } else {
+    console.log(`[ADMIN] Failed auth attempt from ${socket.id}`);
+    next(new Error("Invalid admin key"));
+  }
+});
+
+adminNamespace.on("connection", (socket) => {
+  console.log(`[ADMIN] Admin connected: ${socket.id}`);
+  
+  // Send all rooms on connect
+  const allRooms = Array.from(rooms.values()).map(room => ({
+    roomCode: room.roomCode,
+    playerCount: room.players.length,
+    spectatorCount: room.spectators?.length || 0,
+    hostName: room.players.find(p => p.seatIndex === 0)?.name || "Unknown",
+    createdAt: room.createdAt,
+    lastActivity: room.lastActivity,
+    started: room.started,
+    paused: room.paused,
+    currentTurn: room.players.find(p => p.seatIndex === room.turnIndex)?.name || "None",
+    players: room.players.map(p => ({
+      id: p.playerId,
+      name: p.name,
+      seatIndex: p.seatIndex,
+      connected: p.connected,
+      socketId: p.socketId
+    })),
+    spectators: room.spectators?.map(s => ({
+      id: s.playerId,
+      name: s.name,
+      connected: s.connected
+    })) || []
+  }));
+  
+  socket.emit("admin:rooms", allRooms);
+  
+  // Request to refresh rooms
+  socket.on("admin:getRooms", () => {
+    const allRooms = Array.from(rooms.values()).map(room => ({
+      roomCode: room.roomCode,
+      playerCount: room.players.length,
+      spectatorCount: room.spectators?.length || 0,
+      hostName: room.players.find(p => p.seatIndex === 0)?.name || "Unknown",
+      createdAt: room.createdAt,
+      lastActivity: room.lastActivity,
+      started: room.started,
+      paused: room.paused,
+      currentTurn: room.players.find(p => p.seatIndex === room.turnIndex)?.name || "None",
+      players: room.players.map(p => ({
+        id: p.playerId,
+        name: p.name,
+        seatIndex: p.seatIndex,
+        connected: p.connected,
+        socketId: p.socketId
+      })),
+      spectators: room.spectators?.map(s => ({
+        id: s.playerId,
+        name: s.name,
+        connected: s.connected
+      })) || []
+    }));
+    
+    socket.emit("admin:rooms", allRooms);
+  });
+  
+  // Admin kick player from any room
+  socket.on("admin:kickPlayer", ({ roomCode, playerId }, cb) => {
+    const room = rooms.get(roomCode);
+    if (!room) return cb?.({ error: "ROOM_NOT_FOUND" });
+    
+    const player = room.players.find(p => p.playerId === playerId);
+    if (!player) return cb?.({ error: "PLAYER_NOT_FOUND" });
+    
+    // Remove player from room
+    room.players = room.players.filter(p => p.playerId !== playerId);
+    
+    // Update drink stats
+    delete room.drinkStats[playerId];
+    
+    // Clean up socket tracking
+    if (player.socketId) {
+      socketToPlayer.delete(player.socketId);
+    }
+    
+    // Notify room
+    pushLog(room, {
+      type: "system",
+      text: `${player.name} was kicked by admin.`,
+      actorId: "admin"
+    });
+    
+    // Notify kicked player if they're connected
+    if (player.socketId) {
+      io.to(player.socketId).emit("kicked", { message: "You were kicked by admin" });
+    }
+    
+    // Update room state
+    io.to(roomCode).emit("room:state", { room });
+    updateRoomActivity(roomCode);
+    
+    // Notify all admins
+    const allRooms = Array.from(rooms.values()).map(r => ({ /* same mapping as above */ }));
+    adminNamespace.emit("admin:rooms", allRooms);
+    
+    cb?.({ ok: true, message: `Kicked ${player.name} from ${roomCode}` });
+  });
+  
+  // Admin close any room
+  socket.on("admin:closeRoom", ({ roomCode }, cb) => {
+    const room = rooms.get(roomCode);
+    if (!room) return cb?.({ error: "ROOM_NOT_FOUND" });
+    
+    // Notify all players
+    io.to(roomCode).emit("room:closed", { message: "Room closed by admin" });
+    
+    // Clean up socket tracking for all players in this room
+    for (const player of room.players) {
+      if (player.socketId) {
+        socketToPlayer.delete(player.socketId);
+      }
+    }
+    for (const spectator of room.spectators) {
+      if (spectator.socketId) {
+        socketToPlayer.delete(spectator.socketId);
+      }
+    }
+    
+    // Clean up room
+    rooms.delete(roomCode);
+    const timeout = roomCleanupTimeouts.get(roomCode);
+    if (timeout) clearTimeout(timeout);
+    roomCleanupTimeouts.delete(roomCode);
+    
+    pushLog(room, {
+      type: "system",
+      text: "Room closed by admin.",
+      actorId: "admin"
+    });
+    
+    // Notify all admins
+    const allRooms = Array.from(rooms.values()).map(r => ({ /* same mapping as above */ }));
+    adminNamespace.emit("admin:rooms", allRooms);
+    
+    cb?.({ ok: true, message: `Closed room ${roomCode}` });
+  });
+  
+  // Broadcast room updates to all admins when rooms change
+  const notifyAdminsOfRooms = () => {
+    const allRooms = Array.from(rooms.values()).map(room => ({
+      roomCode: room.roomCode,
+      playerCount: room.players.length,
+      spectatorCount: room.spectators?.length || 0,
+      hostName: room.players.find(p => p.seatIndex === 0)?.name || "Unknown",
+      createdAt: room.createdAt,
+      lastActivity: room.lastActivity,
+      started: room.started,
+      paused: room.paused,
+      currentTurn: room.players.find(p => p.seatIndex === room.turnIndex)?.name || "None",
+      players: room.players.map(p => ({
+        id: p.playerId,
+        name: p.name,
+        seatIndex: p.seatIndex,
+        connected: p.connected,
+        socketId: p.socketId
+      })),
+      spectators: room.spectators?.map(s => ({
+        id: s.playerId,
+        name: s.name,
+        connected: s.connected
+      })) || []
+    }));
+    
+    adminNamespace.emit("admin:rooms", allRooms);
+  };
+  
+  // Listen for room changes and notify admins
+  // We'll call notifyAdminsOfRooms() in room creation/join/disconnect handlers
+  
+  socket.on("disconnect", () => {
+    console.log(`[ADMIN] Admin disconnected: ${socket.id}`);
+  });
+});
+
+// Helper function to notify all admins of room updates
+function notifyAdminsOfRoomUpdate() {
+  const allRooms = Array.from(rooms.values()).map(room => ({
+    roomCode: room.roomCode,
+    playerCount: room.players.length,
+    spectatorCount: room.spectators?.length || 0,
+    hostName: room.players.find(p => p.seatIndex === 0)?.name || "Unknown",
+    createdAt: room.createdAt,
+    lastActivity: room.lastActivity,
+    started: room.started,
+    paused: room.paused,
+    currentTurn: room.players.find(p => p.seatIndex === room.turnIndex)?.name || "None",
+    players: room.players.map(p => ({
+      id: p.playerId,
+      name: p.name,
+      seatIndex: p.seatIndex,
+      connected: p.connected,
+      socketId: p.socketId
+    })),
+    spectators: room.spectators?.map(s => ({
+      id: s.playerId,
+      name: s.name,
+      connected: s.connected
+    })) || []
+  }));
+  
+  adminNamespace.emit("admin:rooms", allRooms);
+}
+
 io.on("connection", (socket) => {
   socket.on("room:create", ({ name }, cb) => {
     // ========== ADD DEDUPLICATION CHECK ==========
@@ -561,6 +784,8 @@ io.on("connection", (socket) => {
     // ========== SCHEDULE INITIAL CLEANUP ==========
     scheduleRoomCleanup(roomCode);
     // ==============================================
+	//notify admin
+	notifyAdminsOfRoomUpdate();
 
     cb({ roomCode, playerId });
     io.to(roomCode).emit("room:state", { room });
@@ -619,6 +844,8 @@ io.on("connection", (socket) => {
     // ========== UPDATE ACTIVITY ==========
     updateRoomActivity(roomCode);
     // =====================================
+	//admin update
+	notifyAdminsOfRoomUpdate();
 
     cb({ roomCode, playerId });
     io.to(roomCode).emit("room:state", { room });
@@ -927,6 +1154,8 @@ io.on("connection", (socket) => {
     // Update room state
     io.to(roomCode).emit("room:state", { room });
     updateRoomActivity(roomCode);
+	
+	notifyAdminsOfRoomUpdate();
     
     cb?.({ ok: true });
   });
@@ -972,6 +1201,8 @@ io.on("connection", (socket) => {
       text: "Room closed by host.",
       actorId: playerId
     });
+	//admin update
+	notifyAdminsOfRoomUpdate();
     
     cb?.({ ok: true });
   });
@@ -1027,6 +1258,7 @@ io.on("connection", (socket) => {
       io.to(roomCode).emit("room:state", { room });
       updateRoomActivity(roomCode);
     }
+	notifyAdminsOfRoomUpdate();
   });
 });
 
