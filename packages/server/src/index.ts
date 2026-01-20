@@ -7,6 +7,28 @@ import { nanoid } from "nanoid";
 import { UltimateDeck } from "@sociables/shared";
 import type { Card, RoomState, Player, RoomLogItem, RoomSettings } from "@sociables/shared";
 
+
+const pendingRequests = new Map<string, number>(); // key = "socketId:action", value = timestamp
+
+function canProcessRequest(socketId: string, action: string, cooldownMs: number = 1000): boolean {
+  const key = `${socketId}:${action}`;
+  const now = Date.now();
+  const lastRequest = pendingRequests.get(key);
+  
+  // If request was made within cooldown period, reject it
+  if (lastRequest && (now - lastRequest) < cooldownMs) {
+    return false;
+  }
+  
+  // Store this request and schedule cleanup
+  pendingRequests.set(key, now);
+  setTimeout(() => {
+    pendingRequests.delete(key);
+  }, cooldownMs + 100); // +100ms buffer
+  
+  return true;
+}
+
 type PendingAck = {
   ackId: string;
   createdAt: number;
@@ -48,6 +70,69 @@ const rooms = new Map<
     _afkNudged?: { turnKey: string; ts: number };
   }
 >();
+
+// ====================
+// ROOM CLEANUP SYSTEM
+// ====================
+const roomCleanupTimeouts = new Map<string, NodeJS.Timeout>();
+const ROOM_INACTIVE_TIMEOUT = 5 * 60 * 1000; // 5 minutes
+
+function updateRoomActivity(roomCode: string): void {
+  const room = rooms.get(roomCode);
+  if (!room) return;
+  
+  // Update last activity timestamp
+  (room as any).lastActivity = Date.now();
+  
+  // Reset the cleanup timeout
+  scheduleRoomCleanup(roomCode);
+}
+
+function scheduleRoomCleanup(roomCode: string): void {
+  // Clear existing timeout if any
+  const existingTimeout = roomCleanupTimeouts.get(roomCode);
+  if (existingTimeout) {
+    clearTimeout(existingTimeout);
+  }
+  
+  // Schedule new cleanup
+  const timeout = setTimeout(() => {
+    cleanupInactiveRoom(roomCode);
+  }, ROOM_INACTIVE_TIMEOUT);
+  
+  roomCleanupTimeouts.set(roomCode, timeout);
+}
+
+function cleanupInactiveRoom(roomCode: string): void {
+  const room = rooms.get(roomCode);
+  if (!room) return;
+  
+  const now = Date.now();
+  const lastActivity = (room as any).lastActivity || room.createdAt || now;
+  
+  // Check if room is actually inactive
+  if (now - lastActivity >= ROOM_INACTIVE_TIMEOUT) {
+    console.log(`[CLEANUP] Removing inactive room: ${roomCode}`);
+    
+    // Notify all players
+    io.to(roomCode).emit('room:closed', 'Room closed due to inactivity');
+    
+    // Clean up
+    rooms.delete(roomCode);
+    roomCleanupTimeouts.delete(roomCode);
+    
+    // Clean up any pending confirmations
+    room.pendingAcks = [];
+  } else {
+    // Room became active again, reschedule
+    scheduleRoomCleanup(roomCode);
+  }
+}
+
+// Initialize cleanup for existing rooms
+rooms.forEach((_, roomCode) => {
+  scheduleRoomCleanup(roomCode);
+});
 
 const byId = new Map<string, Card>(UltimateDeck.map((c) => [c.id, c]));
 
@@ -409,73 +494,101 @@ setInterval(() => {
 }, 500);
 
 io.on("connection", (socket) => {
-  socket.on("room:create", ({ name }, cb) => {
-    const roomCode = nanoid(5).toUpperCase();
-    const playerId = nanoid();
+	socket.on("room:create", ({ name }, cb) => {
+	  // ========== ADD DEDUPLICATION CHECK ==========
+	  if (!canProcessRequest(socket.id, 'room:create')) {
+		socket.emit('error', { message: 'Please wait before creating another room' });
+		return cb?.({ error: 'TOO_MANY_REQUESTS' });
+	  }
+	  // =============================================
+	  
+	  const roomCode = nanoid(5).toUpperCase();
+	  const playerId = nanoid();
 
-    const room: any = {
-      roomCode,
-      deckId: "ultimate" as const,
-      deckOrder: UltimateDeck.map((c) => c.id),
-      drawIndex: 0,
-      discard: [],
-      players: [{ playerId, name, seatIndex: 0, connected: true, mode: "player" as const }],
-      spectators: [] as Player[],
-      turnIndex: 0,
-      started: true,
-      paused: false,
-      currentDraw: null,
-      turnTimer: null,
-      activeEffects: { rules: [], rolesByPlayerId: {}, cursesByPlayerId: {}, currentEvent: null },
-      log: [] as RoomLogItem[],
+	  const room: any = {
+		roomCode,
+		deckId: "ultimate" as const,
+		deckOrder: UltimateDeck.map((c) => c.id),
+		drawIndex: 0,
+		discard: [],
+		players: [{ playerId, name, seatIndex: 0, connected: true, mode: "player" as const }],
+		spectators: [] as Player[],
+		turnIndex: 0,
+		started: true,
+		paused: false,
+		currentDraw: null,
+		turnTimer: null,
+		activeEffects: { rules: [], rolesByPlayerId: {}, cursesByPlayerId: {}, currentEvent: null },
+		log: [] as RoomLogItem[],
 
-      settings: {
-        safeMode: false,
-        dynamicWeighting: true,
-        theme: "obsidian",
-        sfx: true,
-        haptics: true
-      } as RoomSettings,
-      drinkStats: { [playerId]: { given: 0, taken: 0 } } as Record<string, { given: number; taken: number }>,
+		settings: {
+		  safeMode: false,
+		  dynamicWeighting: true,
+		  theme: "obsidian",
+		  sfx: true,
+		  haptics: true
+		} as RoomSettings,
+		drinkStats: { [playerId]: { given: 0, taken: 0 } } as Record<string, { given: number; taken: number }>,
 
-      pendingAcks: [] as PendingAck[],
-      awaitingAcksForCardId: null as string | null
-    };
+		pendingAcks: [] as PendingAck[],
+		awaitingAcksForCardId: null as string | null,
+		
+		// ========== ADD ACTIVITY TRACKING ==========
+		createdAt: Date.now(),
+		lastActivity: Date.now(),
+		hostSocketId: socket.id,
+		// ===========================================
+	  };
 
-    pushLog(room, { type: "system", text: `${name} created the room.`, actorId: playerId });
+	  pushLog(room, { type: "system", text: `${name} created the room.`, actorId: playerId });
 
-    rooms.set(roomCode, room);
-    socket.join(roomCode);
+	  rooms.set(roomCode, room);
+	  socket.join(roomCode);
+	  
+	  // ========== SCHEDULE CLEANUP ==========
+	  scheduleRoomCleanup(roomCode);
+	  // ======================================
 
-    cb({ roomCode, playerId });
-    io.to(roomCode).emit("room:state", { room });
-  });
+	  cb({ roomCode, playerId });
+	  io.to(roomCode).emit("room:state", { room });
+	});
 
-  socket.on("room:join", ({ roomCode, name, spectator }, cb) => {
-    const room = rooms.get(roomCode);
-    if (!room) return cb({ error: "ROOM_NOT_FOUND" });
+	socket.on("room:join", ({ roomCode, name, spectator }, cb) => {
+	  // ========== ADD DEDUPLICATION CHECK ==========
+	  if (!canProcessRequest(socket.id, 'room:join')) {
+		socket.emit('error', { message: 'Please wait before trying again' });
+		return cb?.({ error: 'TOO_MANY_REQUESTS' });
+	  }
+	  // =============================================
+	  
+	  const room = rooms.get(roomCode);
+	  if (!room) return cb({ error: "ROOM_NOT_FOUND" });
 
-    const playerId = nanoid();
-    const isSpectator = !!spectator;
+	  const playerId = nanoid();
+	  const isSpectator = !!spectator;
 
-    if (isSpectator) {
-      room.spectators.push({ playerId, name, seatIndex: -1, connected: true, mode: "spectator" });
-    } else {
-      const seatIndex = activePlayers(room).length;
-      room.players.push({ playerId, name, seatIndex, connected: true, mode: "player" });
-    }
+	  if (isSpectator) {
+		room.spectators.push({ playerId, name, seatIndex: -1, connected: true, mode: "spectator" });
+	  } else {
+		const seatIndex = activePlayers(room).length;
+		room.players.push({ playerId, name, seatIndex, connected: true, mode: "player" });
+	  }
 
-    room.drinkStats[playerId] = { given: 0, taken: 0 };
-    pushLog(room, {
-      type: "system",
-      text: `${name} joined${isSpectator ? " as spectator" : ""}.`,
-      actorId: playerId
-    });
-    socket.join(roomCode);
+	  room.drinkStats[playerId] = { given: 0, taken: 0 };
+	  pushLog(room, {
+		type: "system",
+		text: `${name} joined${isSpectator ? " as spectator" : ""}.`,
+		actorId: playerId
+	  });
+	  socket.join(roomCode);
+	  
+	  // ========== UPDATE ACTIVITY ==========
+	  updateRoomActivity(roomCode);
+	  // =====================================
 
-    cb({ roomCode, playerId });
-    io.to(roomCode).emit("room:state", { room });
-  });
+	  cb({ roomCode, playerId });
+	  io.to(roomCode).emit("room:state", { room });
+	});
 
   socket.on("room:sync", ({ roomCode }, cb) => {
     const room = rooms.get(roomCode);
@@ -488,7 +601,8 @@ io.on("connection", (socket) => {
   socket.on("turn:draw", ({ roomCode, playerId }, cb) => {
     const room = rooms.get(roomCode);
     if (!room) return cb({ error: "ROOM_NOT_FOUND" });
-
+	
+	updateRoomActivity(roomcode);
     // confirmations are non-blocking now:
     // if (room.awaitingAcksForCardId) return cb({ error: "WAITING_FOR_CONFIRMATIONS" });
 
@@ -538,6 +652,8 @@ io.on("connection", (socket) => {
   socket.on("card:resolve", ({ roomCode, playerId, cardId, resolution }, cb) => {
     const room = rooms.get(roomCode);
     if (!room) return cb({ error: "ROOM_NOT_FOUND" });
+	
+	updateRoomActivity(roomCode);
 
     // confirmations are non-blocking now:
     // if (room.awaitingAcksForCardId) return cb({ error: "WAITING_FOR_CONFIRMATIONS" });
@@ -642,6 +758,35 @@ io.on("connection", (socket) => {
 
     cb({ ok: true });
   });
+  
+	socket.on("disconnect", () => {
+	// Find all rooms this socket is in
+	for (const [roomCode, room] of rooms) {
+	  const player = room.players.find(p => p.socketId === socket.id);
+	  const spectator = room.spectators?.find(s => s.socketId === socket.id);
+	  
+	  if (player) {
+		// If host disconnects, close the room
+		if (player.seatIndex === 0) {
+		  io.to(roomCode).emit("room:closed", "Host disconnected");
+		  rooms.delete(roomCode);
+		  const timeout = roomCleanupTimeouts.get(roomCode);
+		  if (timeout) clearTimeout(timeout);
+		  roomCleanupTimeouts.delete(roomCode);
+		} else {
+		  // Regular player - just remove them
+		  room.players = room.players.filter(p => p.socketId !== socket.id);
+		  io.to(roomCode).emit("room:state", { room });
+		  updateRoomActivity(roomCode);
+		}
+	  } else if (spectator) {
+		// Remove spectator
+		room.spectators = room.spectators.filter(s => s.socketId !== socket.id);
+		io.to(roomCode).emit("room:state", { room });
+		updateRoomActivity(roomCode);
+	  }
+	}
+	});
 
   socket.on("ack:confirm", ({ roomCode, playerId, ackId }, cb) => {
     const room = rooms.get(roomCode);
@@ -700,6 +845,77 @@ io.on("connection", (socket) => {
     pushLog(room, { type: "deck", text: `${playerName(room, playerId)} loaded a custom deck (${clean.length} cards).`, actorId: playerId });
     io.to(roomCode).emit("room:state", { room });
     cb({ ok: true });
+  });
+  // ====================
+  // HOST CONTROLS
+  // ====================
+  
+  socket.on("host:kick", ({ roomCode, targetPlayerId }, cb) => {
+    const room = rooms.get(roomCode);
+    if (!room) return cb?.({ error: "ROOM_NOT_FOUND" });
+    
+    // Check if requester is host (first player)
+    const hostPlayer = room.players.find(p => p.seatIndex === 0);
+    if (!hostPlayer || hostPlayer.playerId !== playerId) {
+      return cb?.({ error: "NOT_HOST" });
+    }
+    
+    // Find target player
+    const targetPlayer = room.players.find(p => p.playerId === targetPlayerId);
+    if (!targetPlayer) return cb?.({ error: "PLAYER_NOT_FOUND" });
+    
+    // Can't kick yourself
+    if (targetPlayerId === playerId) return cb?.({ error: "CANNOT_KICK_SELF" });
+    
+    // Remove player from room
+    room.players = room.players.filter(p => p.playerId !== targetPlayerId);
+    
+    // Update drink stats
+    delete room.drinkStats[targetPlayerId];
+    
+    // Notify room
+    pushLog(room, {
+      type: "system",
+      text: `${targetPlayer.name} was kicked by host.`,
+      actorId: playerId
+    });
+    
+    // Notify kicked player
+    io.to(targetPlayer.socketId).emit("kicked", "You were kicked by the host");
+    
+    // Update room state
+    io.to(roomCode).emit("room:state", { room });
+    updateRoomActivity(roomCode);
+    
+    cb?.({ ok: true });
+  });
+  
+  socket.on("host:close-room", ({ roomCode }, cb) => {
+    const room = rooms.get(roomCode);
+    if (!room) return cb?.({ error: "ROOM_NOT_FOUND" });
+    
+    // Check if requester is host
+    const hostPlayer = room.players.find(p => p.seatIndex === 0);
+    if (!hostPlayer || hostPlayer.playerId !== playerId) {
+      return cb?.({ error: "NOT_HOST" });
+    }
+    
+    // Notify all players
+    io.to(roomCode).emit("room:closed", "Room closed by host");
+    
+    // Clean up room
+    rooms.delete(roomCode);
+    const timeout = roomCleanupTimeouts.get(roomCode);
+    if (timeout) clearTimeout(timeout);
+    roomCleanupTimeouts.delete(roomCode);
+    
+    pushLog(room, {
+      type: "system",
+      text: "Room closed by host.",
+      actorId: playerId
+    });
+    
+    cb?.({ ok: true });
   });
 });
 
