@@ -39,6 +39,9 @@ export type Player = {
   connected: boolean;
   /** spectators can view but cannot take turns */
   mode?: "player" | "spectator";
+  // ========== ADDED FOR SOCKET TRACKING ==========
+  socketId?: string;
+  // ===============================================
 };
 
 export type PendingAck = {
@@ -113,4 +116,9 @@ export type RoomState = {
   settings?: RoomSettings;
   drinkStats?: DrinkStats;
   spectators?: Player[];
+  // ========== ADDED FOR ACTIVITY TRACKING ==========
+  createdAt?: number;
+  lastActivity?: number;
+  hostSocketId?: string;
+  // =================================================
 };

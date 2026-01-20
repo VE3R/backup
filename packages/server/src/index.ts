@@ -7,7 +7,36 @@ import { nanoid } from "nanoid";
 import { UltimateDeck } from "@sociables/shared";
 import type { Card, RoomState, Player, RoomLogItem, RoomSettings } from "@sociables/shared";
 
+type PendingAck = {
+  ackId: string;
+  createdAt: number;
+  cardId: string;
+  cardTitle: string;
+  instruction: string;
+  createdByPlayerId: string;
+  assignedToPlayerId: string;
+  status: "pending" | "confirmed";
+  confirmedAt?: number;
 
+  // NEW: structured info so the client can generate messages without huge per-card tables
+  meta?: {
+    kind: string;
+    numberValue?: number;
+    ruleText?: string;
+    targets?: string[];
+  };
+};
+
+const app = express();
+app.use(cors({ origin: process.env.WEB_ORIGIN || "*" }));
+app.get("/health", (_, res) => res.json({ ok: true }));
+
+const server = http.createServer(app);
+const io = new Server(server, { cors: { origin: process.env.WEB_ORIGIN || "*" } });
+
+// ====================
+// REQUEST DEDUPLICATION SYSTEM
+// ====================
 const pendingRequests = new Map<string, number>(); // key = "socketId:action", value = timestamp
 
 function canProcessRequest(socketId: string, action: string, cooldownMs: number = 1000): boolean {
@@ -29,48 +58,6 @@ function canProcessRequest(socketId: string, action: string, cooldownMs: number 
   return true;
 }
 
-type PendingAck = {
-  ackId: string;
-  createdAt: number;
-  cardId: string;
-  cardTitle: string;
-  instruction: string;
-  createdByPlayerId: string;
-  assignedToPlayerId: string;
-  status: "pending" | "confirmed";
-  confirmedAt?: number;
-
-  // NEW: structured info so the client can generate messages without huge per-card tables
-  meta?: {
-    kind: string;
-    numberValue?: number;
-    ruleText?: string;
-    targets?: string[];
-  };
-};
-
-
-const app = express();
-app.use(cors({ origin: process.env.WEB_ORIGIN || "*" }));
-app.get("/health", (_, res) => res.json({ ok: true }));
-
-const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: process.env.WEB_ORIGIN || "*" } });
-
-// NOTE: We keep awaitingAcksForCardId in the state for compatibility,
-// but we no longer use it to BLOCK gameplay. Pending confirmations are non-blocking.
-const rooms = new Map<
-  string,
-  RoomState & {
-    pendingAcks: PendingAck[];
-    awaitingAcksForCardId: string | null;
-    settings: RoomSettings;
-    drinkStats: Record<string, { given: number; taken: number }>;
-    spectators: Player[];
-    _afkNudged?: { turnKey: string; ts: number };
-  }
->();
-
 // ====================
 // ROOM CLEANUP SYSTEM
 // ====================
@@ -82,7 +69,7 @@ function updateRoomActivity(roomCode: string): void {
   if (!room) return;
   
   // Update last activity timestamp
-  (room as any).lastActivity = Date.now();
+  room.lastActivity = Date.now();
   
   // Reset the cleanup timeout
   scheduleRoomCleanup(roomCode);
@@ -108,7 +95,7 @@ function cleanupInactiveRoom(roomCode: string): void {
   if (!room) return;
   
   const now = Date.now();
-  const lastActivity = (room as any).lastActivity || room.createdAt || now;
+  const lastActivity = room.lastActivity || room.createdAt || now;
   
   // Check if room is actually inactive
   if (now - lastActivity >= ROOM_INACTIVE_TIMEOUT) {
@@ -129,10 +116,24 @@ function cleanupInactiveRoom(roomCode: string): void {
   }
 }
 
-// Initialize cleanup for existing rooms
-rooms.forEach((_, roomCode) => {
-  scheduleRoomCleanup(roomCode);
-});
+// ====================
+// SOCKET-PLAYER TRACKING
+// ====================
+const socketToPlayer = new Map<string, { roomCode: string; playerId: string }>();
+
+// NOTE: We keep awaitingAcksForCardId in the state for compatibility,
+// but we no longer use it to BLOCK gameplay. Pending confirmations are non-blocking.
+const rooms = new Map<
+  string,
+  RoomState & {
+    pendingAcks: PendingAck[];
+    awaitingAcksForCardId: string | null;
+    settings: RoomSettings;
+    drinkStats: Record<string, { given: number; taken: number }>;
+    spectators: Player[];
+    _afkNudged?: { turnKey: string; ts: number };
+  }
+>();
 
 const byId = new Map<string, Card>(UltimateDeck.map((c) => [c.id, c]));
 
@@ -472,7 +473,7 @@ setInterval(() => {
       const pid = room.currentDraw.drawnByPlayerId;
       room.drinkStats[pid] = room.drinkStats[pid] || { given: 0, taken: 0 };
       room.drinkStats[pid].taken += 1;
-      pushLog(room, { type: "system", text: `Time’s up. ${name} takes 1 drink.`, actorId: pid });
+      pushLog(room, { type: "system", text: `Time's up. ${name} takes 1 drink.`, actorId: pid });
 
       room.currentDraw = null;
       room.turnTimer = null;
@@ -481,7 +482,7 @@ setInterval(() => {
 
       io.to(room.roomCode).emit("effect:applied", {
         room,
-        message: `Time’s up. ${name} takes 1 drink. Turn passes.`
+        message: `Time's up. ${name} takes 1 drink. Turn passes.`
       });
 
       io.to(room.roomCode).emit("turn:changed", { turnIndex: room.turnIndex, playerId: nextPlayerId });
@@ -494,101 +495,134 @@ setInterval(() => {
 }, 500);
 
 io.on("connection", (socket) => {
-	socket.on("room:create", ({ name }, cb) => {
-	  // ========== ADD DEDUPLICATION CHECK ==========
-	  if (!canProcessRequest(socket.id, 'room:create')) {
-		socket.emit('error', { message: 'Please wait before creating another room' });
-		return cb?.({ error: 'TOO_MANY_REQUESTS' });
-	  }
-	  // =============================================
-	  
-	  const roomCode = nanoid(5).toUpperCase();
-	  const playerId = nanoid();
+  socket.on("room:create", ({ name }, cb) => {
+    // ========== ADD DEDUPLICATION CHECK ==========
+    if (!canProcessRequest(socket.id, 'room:create')) {
+      return cb?.({ error: 'TOO_MANY_REQUESTS', message: 'Please wait before creating another room' });
+    }
+    // =============================================
+    
+    const roomCode = nanoid(5).toUpperCase();
+    const playerId = nanoid();
 
-	  const room: any = {
-		roomCode,
-		deckId: "ultimate" as const,
-		deckOrder: UltimateDeck.map((c) => c.id),
-		drawIndex: 0,
-		discard: [],
-		players: [{ playerId, name, seatIndex: 0, connected: true, mode: "player" as const }],
-		spectators: [] as Player[],
-		turnIndex: 0,
-		started: true,
-		paused: false,
-		currentDraw: null,
-		turnTimer: null,
-		activeEffects: { rules: [], rolesByPlayerId: {}, cursesByPlayerId: {}, currentEvent: null },
-		log: [] as RoomLogItem[],
+    const room: any = {
+      roomCode,
+      deckId: "ultimate" as const,
+      deckOrder: UltimateDeck.map((c) => c.id),
+      drawIndex: 0,
+      discard: [],
+      players: [{ 
+        playerId, 
+        name, 
+        seatIndex: 0, 
+        connected: true, 
+        mode: "player" as const,
+        // ========== ADD SOCKET ID ==========
+        socketId: socket.id
+        // ===================================
+      }],
+      spectators: [] as Player[],
+      turnIndex: 0,
+      started: true,
+      paused: false,
+      currentDraw: null,
+      turnTimer: null,
+      activeEffects: { rules: [], rolesByPlayerId: {}, cursesByPlayerId: {}, currentEvent: null },
+      log: [] as RoomLogItem[],
 
-		settings: {
-		  safeMode: false,
-		  dynamicWeighting: true,
-		  theme: "obsidian",
-		  sfx: true,
-		  haptics: true
-		} as RoomSettings,
-		drinkStats: { [playerId]: { given: 0, taken: 0 } } as Record<string, { given: number; taken: number }>,
+      settings: {
+        safeMode: false,
+        dynamicWeighting: true,
+        theme: "obsidian",
+        sfx: true,
+        haptics: true
+      } as RoomSettings,
+      drinkStats: { [playerId]: { given: 0, taken: 0 } } as Record<string, { given: number; taken: number }>,
 
-		pendingAcks: [] as PendingAck[],
-		awaitingAcksForCardId: null as string | null,
-		
-		// ========== ADD ACTIVITY TRACKING ==========
-		createdAt: Date.now(),
-		lastActivity: Date.now(),
-		hostSocketId: socket.id,
-		// ===========================================
-	  };
+      pendingAcks: [] as PendingAck[],
+      awaitingAcksForCardId: null as string | null,
+      
+      // ========== ADD ACTIVITY TRACKING ==========
+      createdAt: Date.now(),
+      lastActivity: Date.now(),
+      hostSocketId: socket.id,
+      // ===========================================
+    };
 
-	  pushLog(room, { type: "system", text: `${name} created the room.`, actorId: playerId });
+    pushLog(room, { type: "system", text: `${name} created the room.`, actorId: playerId });
 
-	  rooms.set(roomCode, room);
-	  socket.join(roomCode);
-	  
-	  // ========== SCHEDULE CLEANUP ==========
-	  scheduleRoomCleanup(roomCode);
-	  // ======================================
+    rooms.set(roomCode, room);
+    socket.join(roomCode);
+    
+    // ========== TRACK SOCKET-PLAYER MAPPING ==========
+    socketToPlayer.set(socket.id, { roomCode, playerId });
+    // =================================================
+    
+    // ========== SCHEDULE INITIAL CLEANUP ==========
+    scheduleRoomCleanup(roomCode);
+    // ==============================================
 
-	  cb({ roomCode, playerId });
-	  io.to(roomCode).emit("room:state", { room });
-	});
+    cb({ roomCode, playerId });
+    io.to(roomCode).emit("room:state", { room });
+  });
 
-	socket.on("room:join", ({ roomCode, name, spectator }, cb) => {
-	  // ========== ADD DEDUPLICATION CHECK ==========
-	  if (!canProcessRequest(socket.id, 'room:join')) {
-		socket.emit('error', { message: 'Please wait before trying again' });
-		return cb?.({ error: 'TOO_MANY_REQUESTS' });
-	  }
-	  // =============================================
-	  
-	  const room = rooms.get(roomCode);
-	  if (!room) return cb({ error: "ROOM_NOT_FOUND" });
+  socket.on("room:join", ({ roomCode, name, spectator }, cb) => {
+    // ========== ADD DEDUPLICATION CHECK ==========
+    if (!canProcessRequest(socket.id, 'room:join')) {
+      return cb?.({ error: 'TOO_MANY_REQUESTS', message: 'Please wait before trying again' });
+    }
+    // =============================================
+    
+    const room = rooms.get(roomCode);
+    if (!room) return cb({ error: "ROOM_NOT_FOUND" });
 
-	  const playerId = nanoid();
-	  const isSpectator = !!spectator;
+    const playerId = nanoid();
+    const isSpectator = !!spectator;
 
-	  if (isSpectator) {
-		room.spectators.push({ playerId, name, seatIndex: -1, connected: true, mode: "spectator" });
-	  } else {
-		const seatIndex = activePlayers(room).length;
-		room.players.push({ playerId, name, seatIndex, connected: true, mode: "player" });
-	  }
+    if (isSpectator) {
+      room.spectators.push({ 
+        playerId, 
+        name, 
+        seatIndex: -1, 
+        connected: true, 
+        mode: "spectator",
+        // ========== ADD SOCKET ID ==========
+        socketId: socket.id
+        // ===================================
+      });
+    } else {
+      const seatIndex = activePlayers(room).length;
+      room.players.push({ 
+        playerId, 
+        name, 
+        seatIndex, 
+        connected: true, 
+        mode: "player",
+        // ========== ADD SOCKET ID ==========
+        socketId: socket.id
+        // ===================================
+      });
+    }
 
-	  room.drinkStats[playerId] = { given: 0, taken: 0 };
-	  pushLog(room, {
-		type: "system",
-		text: `${name} joined${isSpectator ? " as spectator" : ""}.`,
-		actorId: playerId
-	  });
-	  socket.join(roomCode);
-	  
-	  // ========== UPDATE ACTIVITY ==========
-	  updateRoomActivity(roomCode);
-	  // =====================================
+    room.drinkStats[playerId] = { given: 0, taken: 0 };
+    pushLog(room, {
+      type: "system",
+      text: `${name} joined${isSpectator ? " as spectator" : ""}.`,
+      actorId: playerId
+    });
+    socket.join(roomCode);
+    
+    // ========== TRACK SOCKET-PLAYER MAPPING ==========
+    socketToPlayer.set(socket.id, { roomCode, playerId });
+    // =================================================
+    
+    // ========== UPDATE ACTIVITY ==========
+    updateRoomActivity(roomCode);
+    // =====================================
 
-	  cb({ roomCode, playerId });
-	  io.to(roomCode).emit("room:state", { room });
-	});
+    cb({ roomCode, playerId });
+    io.to(roomCode).emit("room:state", { room });
+  });
 
   socket.on("room:sync", ({ roomCode }, cb) => {
     const room = rooms.get(roomCode);
@@ -601,8 +635,7 @@ io.on("connection", (socket) => {
   socket.on("turn:draw", ({ roomCode, playerId }, cb) => {
     const room = rooms.get(roomCode);
     if (!room) return cb({ error: "ROOM_NOT_FOUND" });
-	
-	updateRoomActivity(roomcode);
+
     // confirmations are non-blocking now:
     // if (room.awaitingAcksForCardId) return cb({ error: "WAITING_FOR_CONFIRMATIONS" });
 
@@ -643,6 +676,10 @@ io.on("connection", (socket) => {
     room.turnTimer = t.enabled
       ? { enabled: true, secondsTotal: t.seconds, endsAt: Date.now() + t.seconds * 1000 }
       : { enabled: false, secondsTotal: 0, endsAt: 0, reason: t.reason };
+    
+    // ========== UPDATE ACTIVITY ==========
+    updateRoomActivity(roomCode);
+    // =====================================
 
     io.to(roomCode).emit("card:drawn", { card, drawnByPlayerId: playerId });
     io.to(roomCode).emit("room:state", { room });
@@ -652,8 +689,6 @@ io.on("connection", (socket) => {
   socket.on("card:resolve", ({ roomCode, playerId, cardId, resolution }, cb) => {
     const room = rooms.get(roomCode);
     if (!room) return cb({ error: "ROOM_NOT_FOUND" });
-	
-	updateRoomActivity(roomCode);
 
     // confirmations are non-blocking now:
     // if (room.awaitingAcksForCardId) return cb({ error: "WAITING_FOR_CONFIRMATIONS" });
@@ -745,7 +780,6 @@ io.on("connection", (socket) => {
 	  room.awaitingAcksForCardId = null;
 	}
 
-
     // Always advance immediately (game never stalls waiting on confirmations)
     const nextPlayerId = nextTurn(room);
 
@@ -755,38 +789,13 @@ io.on("connection", (socket) => {
     io.to(roomCode).emit("effect:applied", { room, message: `${announce}. ${effectMessage}${pendingText}` });
     io.to(roomCode).emit("turn:changed", { turnIndex: room.turnIndex, playerId: nextPlayerId });
     io.to(roomCode).emit("room:state", { room });
+    
+    // ========== UPDATE ACTIVITY ==========
+    updateRoomActivity(roomCode);
+    // =====================================
 
     cb({ ok: true });
   });
-  
-	socket.on("disconnect", () => {
-	// Find all rooms this socket is in
-	for (const [roomCode, room] of rooms) {
-	  const player = room.players.find(p => p.socketId === socket.id);
-	  const spectator = room.spectators?.find(s => s.socketId === socket.id);
-	  
-	  if (player) {
-		// If host disconnects, close the room
-		if (player.seatIndex === 0) {
-		  io.to(roomCode).emit("room:closed", "Host disconnected");
-		  rooms.delete(roomCode);
-		  const timeout = roomCleanupTimeouts.get(roomCode);
-		  if (timeout) clearTimeout(timeout);
-		  roomCleanupTimeouts.delete(roomCode);
-		} else {
-		  // Regular player - just remove them
-		  room.players = room.players.filter(p => p.socketId !== socket.id);
-		  io.to(roomCode).emit("room:state", { room });
-		  updateRoomActivity(roomCode);
-		}
-	  } else if (spectator) {
-		// Remove spectator
-		room.spectators = room.spectators.filter(s => s.socketId !== socket.id);
-		io.to(roomCode).emit("room:state", { room });
-		updateRoomActivity(roomCode);
-	  }
-	}
-	});
 
   socket.on("ack:confirm", ({ roomCode, playerId, ackId }, cb) => {
     const room = rooms.get(roomCode);
@@ -804,6 +813,10 @@ io.on("connection", (socket) => {
     // Remove confirmed acks to keep the list clean (optional but recommended)
     // If you want to keep history, comment this out.
     room.pendingAcks = room.pendingAcks.filter((a) => a.status !== "confirmed");
+    
+    // ========== UPDATE ACTIVITY ==========
+    updateRoomActivity(roomCode);
+    // =====================================
 
     io.to(roomCode).emit("effect:applied", { room, message: `${playerName(room, playerId)} confirmed.` });
     io.to(roomCode).emit("room:state", { room });
@@ -817,6 +830,11 @@ io.on("connection", (socket) => {
     const fromName = playerName(room, fromPlayerId);
     io.to(roomCode).emit("player:nudged", { roomCode, toPlayerId, fromName });
     pushLog(room, { type: "nudge", text: `${fromName} nudged ${playerName(room, toPlayerId)}.`, actorId: fromPlayerId });
+    
+    // ========== UPDATE ACTIVITY ==========
+    updateRoomActivity(roomCode);
+    // =====================================
+    
     io.to(roomCode).emit("room:state", { room });
     cb({ ok: true });
   });
@@ -827,6 +845,11 @@ io.on("connection", (socket) => {
     if (!isHost(room, playerId)) return cb({ error: "NOT_HOST" });
     room.settings = { ...room.settings, ...patch };
     pushLog(room, { type: "setting", text: `${playerName(room, playerId)} updated settings.`, actorId: playerId });
+    
+    // ========== UPDATE ACTIVITY ==========
+    updateRoomActivity(roomCode);
+    // =====================================
+    
     io.to(roomCode).emit("room:state", { room });
     cb({ ok: true });
   });
@@ -843,9 +866,15 @@ io.on("connection", (socket) => {
     room.currentDraw = null;
     room.turnTimer = null;
     pushLog(room, { type: "deck", text: `${playerName(room, playerId)} loaded a custom deck (${clean.length} cards).`, actorId: playerId });
+    
+    // ========== UPDATE ACTIVITY ==========
+    updateRoomActivity(roomCode);
+    // =====================================
+    
     io.to(roomCode).emit("room:state", { room });
     cb({ ok: true });
   });
+
   // ====================
   // HOST CONTROLS
   // ====================
@@ -853,6 +882,11 @@ io.on("connection", (socket) => {
   socket.on("host:kick", ({ roomCode, targetPlayerId }, cb) => {
     const room = rooms.get(roomCode);
     if (!room) return cb?.({ error: "ROOM_NOT_FOUND" });
+    
+    // Get playerId from socket tracking
+    const playerInfo = socketToPlayer.get(socket.id);
+    if (!playerInfo) return cb?.({ error: "PLAYER_NOT_FOUND" });
+    const { playerId } = playerInfo;
     
     // Check if requester is host (first player)
     const hostPlayer = room.players.find(p => p.seatIndex === 0);
@@ -873,6 +907,11 @@ io.on("connection", (socket) => {
     // Update drink stats
     delete room.drinkStats[targetPlayerId];
     
+    // Clean up socket tracking
+    if (targetPlayer.socketId) {
+      socketToPlayer.delete(targetPlayer.socketId);
+    }
+    
     // Notify room
     pushLog(room, {
       type: "system",
@@ -880,8 +919,10 @@ io.on("connection", (socket) => {
       actorId: playerId
     });
     
-    // Notify kicked player
-    io.to(targetPlayer.socketId).emit("kicked", "You were kicked by the host");
+    // Notify kicked player if they're connected
+    if (targetPlayer.socketId) {
+      io.to(targetPlayer.socketId).emit("kicked", { message: "You were kicked by the host" });
+    }
     
     // Update room state
     io.to(roomCode).emit("room:state", { room });
@@ -894,14 +935,31 @@ io.on("connection", (socket) => {
     const room = rooms.get(roomCode);
     if (!room) return cb?.({ error: "ROOM_NOT_FOUND" });
     
-    // Check if requester is host
+    // Get playerId from socket tracking
+    const playerInfo = socketToPlayer.get(socket.id);
+    if (!playerInfo) return cb?.({ error: "PLAYER_NOT_FOUND" });
+    const { playerId } = playerInfo;
+    
+    // Check if requester is host (first player)
     const hostPlayer = room.players.find(p => p.seatIndex === 0);
     if (!hostPlayer || hostPlayer.playerId !== playerId) {
       return cb?.({ error: "NOT_HOST" });
     }
     
     // Notify all players
-    io.to(roomCode).emit("room:closed", "Room closed by host");
+    io.to(roomCode).emit("room:closed", { message: "Room closed by host" });
+    
+    // Clean up socket tracking for all players in this room
+    for (const player of room.players) {
+      if (player.socketId) {
+        socketToPlayer.delete(player.socketId);
+      }
+    }
+    for (const spectator of room.spectators) {
+      if (spectator.socketId) {
+        socketToPlayer.delete(spectator.socketId);
+      }
+    }
     
     // Clean up room
     rooms.delete(roomCode);
@@ -916,6 +974,59 @@ io.on("connection", (socket) => {
     });
     
     cb?.({ ok: true });
+  });
+
+  // ====================
+  // DISCONNECT HANDLER
+  // ====================
+  socket.on("disconnect", () => {
+    const playerInfo = socketToPlayer.get(socket.id);
+    if (!playerInfo) return;
+    
+    const { roomCode, playerId } = playerInfo;
+    const room = rooms.get(roomCode);
+    if (!room) return;
+    
+    // Remove from tracking
+    socketToPlayer.delete(socket.id);
+    
+    // Find the player
+    const player = room.players.find(p => p.playerId === playerId);
+    const spectator = room.spectators?.find(s => s.playerId === playerId);
+    
+    if (player) {
+      // If host disconnects, close the room
+      if (player.seatIndex === 0) {
+        io.to(roomCode).emit("room:closed", { message: "Host disconnected" });
+        rooms.delete(roomCode);
+        const timeout = roomCleanupTimeouts.get(roomCode);
+        if (timeout) clearTimeout(timeout);
+        roomCleanupTimeouts.delete(roomCode);
+        
+        // Clean up socket tracking for all players in this room
+        for (const p of room.players) {
+          if (p.socketId) {
+            socketToPlayer.delete(p.socketId);
+          }
+        }
+        for (const s of room.spectators) {
+          if (s.socketId) {
+            socketToPlayer.delete(s.socketId);
+          }
+        }
+      } else {
+        // Regular player - mark as disconnected
+        player.connected = false;
+        player.socketId = undefined;
+        io.to(roomCode).emit("room:state", { room });
+        updateRoomActivity(roomCode);
+      }
+    } else if (spectator) {
+      // Remove spectator
+      room.spectators = room.spectators.filter(s => s.playerId !== playerId);
+      io.to(roomCode).emit("room:state", { room });
+      updateRoomActivity(roomCode);
+    }
   });
 });
 
