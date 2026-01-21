@@ -2,11 +2,17 @@
   "compilerOptions": {
     "target": "ES2020",
     "module": "ES2022",
-    "moduleResolution": "Bundler",
+    "moduleResolution": "NodeNext",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "outDir": "dist"
+    "outDir": "dist",
+    "noImplicitAny": false,
+    "types": [
+      "node"
+    ]
   },
-  "include": ["src"]
+  "include": [
+    "src"
+  ]
 }

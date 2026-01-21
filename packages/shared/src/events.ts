@@ -6,7 +6,13 @@ export type ClientToServerEvents = {
   "room:sync": (p: { roomCode: string }, cb: any) => void;
   "game:start": (p: { roomCode: string }, cb: any) => void;
   "turn:draw": (p: { roomCode: string; playerId: string }, cb: any) => void;
-  "card:resolve": (
+  "interaction:rps:choose": (
+  p: { roomCode: string; playerId: string; choice: "rock" | "paper" | "scissors" },
+  cb: any
+) => void;
+"interaction:wyr:vote": (p: { roomCode: string; playerId: string; vote: "A" | "B" }, cb: any) => void;
+
+"card:resolve": (
     p: {
       roomCode: string;
       playerId: string;

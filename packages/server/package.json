@@ -9,12 +9,14 @@
   "devDependencies": {
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
-    "tsx": "^4.21.0"
+    "tsx": "^4.21.0",
+    "@types/node": "^20.11.30"
   },
   "dependencies": {
     "cors": "^2.8.5",
     "express": "^5.2.1",
     "nanoid": "^3.3.11",
-    "socket.io": "^4.8.3"
+    "socket.io": "^4.8.3",
+    "@sociables/shared": "workspace:*"
   }
 }

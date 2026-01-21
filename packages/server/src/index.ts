@@ -158,7 +158,7 @@ const rooms = new Map<
   }
 >();
 
-const byId = new Map<string, Card>(UltimateDeck.map((c) => [c.id, c]));
+const byId = new Map<string, Card>(UltimateDeck.map((c: any) => [c.id, c]));
 
 function playerName(room: any, pid: string) {
   return (
@@ -200,6 +200,53 @@ function assertIsTurnPlayer(room: RoomState, playerId: string) {
   return { ok: true as const };
 }
 
+
+function emojiForRps(c: "rock" | "paper" | "scissors") {
+  if (c === "rock") return "🪨";
+  if (c === "paper") return "📄";
+  return "✂️";
+}
+
+function finalizeWouldYouRather(room: any, roomCode: string) {
+  const inter = room.interaction;
+  if (!inter || inter.kind !== "wyr") return;
+
+  const ap = activePlayers(room).map((p: any) => p.playerId);
+
+  const votesA = ap.filter((pid: any) => inter.votes[pid] === "A");
+  const votesB = ap.filter((pid: any) => inter.votes[pid] === "B");
+
+  const aCount = votesA.length;
+  const bCount = votesB.length;
+
+  const bumpTaken = (pid: string, n: number) => {
+    ensurePlayerStats(room, pid);
+    room.drinkStats[pid].taken += n;
+  };
+
+  let message = `Would You Rather results: A (${aCount}) vs B (${bCount}). `;
+
+  if (aCount === bCount) {
+    for (const pid of ap) bumpTaken(pid, 1);
+    message += "Tie — everyone drinks 1.";
+  } else if (aCount < bCount) {
+    for (const pid of votesA) bumpTaken(pid, 1);
+    message += `Minority (A) drinks 1: ${votesA.map((pid: any) => playerName(room, pid)).join(", ")}.`;
+  } else {
+    for (const pid of votesB) bumpTaken(pid, 1);
+    message += `Minority (B) drinks 1: ${votesB.map((pid: any) => playerName(room, pid)).join(", ")}.`;
+  }
+
+  pushLog(room, { type: "system", text: message, cardId: inter.cardId });
+  room.interaction = null;
+
+  const nextPlayerId = nextTurn(room);
+  io.to(roomCode).emit("effect:applied", { room, message });
+  io.to(roomCode).emit("turn:changed", { turnIndex: room.turnIndex, playerId: nextPlayerId });
+  io.to(roomCode).emit("room:state", { room });
+}
+
+
 function nextTurn(room: any) {
   const ap = activePlayers(room);
   if (!ap.length) {
@@ -216,7 +263,7 @@ function isHost(room: any, playerId: string) {
 }
 
 function sanitizeDeckOrder(order: string[]) {
-  const set = new Set(UltimateDeck.map((c) => c.id));
+  const set = new Set(UltimateDeck.map((c: any) => c.id));
   return order.filter((id) => set.has(id));
 }
 
@@ -291,6 +338,7 @@ function computeTimer(card: Card) {
 
   switch (card.resolution.kind) {
     case "chooseTarget":
+    case "rockPaperScissors":
       seconds += 10;
       break;
     case "chooseNumber":
@@ -448,6 +496,42 @@ setInterval(() => {
   const now = Date.now();
 
   for (const room of rooms.values()) {
+    // INTERACTION_TIMEOUT
+    if (room.interaction && room.interaction.expiresAt <= now) {
+      if (room.interaction.kind === "rps") {
+        const inter = room.interaction;
+        const a = inter.startedByPlayerId;
+        const b = inter.opponentPlayerId;
+        const ca = inter.choices[a];
+        const cbChoice = inter.choices[b];
+        let message = `Rock Paper Scissors timed out. `;
+        ensurePlayerStats(room, a);
+        ensurePlayerStats(room, b);
+        if (ca && !cbChoice) {
+          room.drinkStats[b].taken += 1;
+          message += `${playerName(room, b)} didn't choose — drinks 1.`;
+        } else if (!ca && cbChoice) {
+          room.drinkStats[a].taken += 1;
+          message += `${playerName(room, a)} didn't choose — drinks 1.`;
+        } else {
+          room.drinkStats[a].taken += 1;
+          room.drinkStats[b].taken += 1;
+          message += `No choices — both drink 1.`;
+        }
+        pushLog(room, { type: "system", text: message, cardId: inter.cardId });
+        room.interaction = null;
+        const nextPlayerId = nextTurn(room);
+        io.to(room.roomCode).emit("effect:applied", { room, message });
+        io.to(room.roomCode).emit("turn:changed", { turnIndex: room.turnIndex, playerId: nextPlayerId });
+        io.to(room.roomCode).emit("room:state", { room });
+        continue;
+      }
+
+      if (room.interaction.kind === "wyr") {
+        finalizeWouldYouRather(room, room.roomCode);
+        continue;
+      }
+    }
     if (!room.started || room.paused) continue;
     if (!room.turnTimer?.enabled) continue;
 
@@ -807,7 +891,7 @@ io.on("connection", (socket) => {
     const room: any = {
       roomCode,
       deckId: "ultimate" as const,
-      deckOrder: UltimateDeck.map((c) => c.id),
+      deckOrder: UltimateDeck.map((c: any) => c.id),
       drawIndex: 0,
       discard: [],
       players: [{ 
@@ -842,6 +926,7 @@ io.on("connection", (socket) => {
       createdAt: Date.now(),
       lastActivity: Date.now(),
       hostSocketId: socket.id,
+      interaction: null,
     };
 
     pushLog(room, { type: "system", text: `${name} created the room.`, actorId: playerId });
@@ -949,6 +1034,8 @@ io.on("connection", (socket) => {
 
     if (room.currentDraw) return cb?.({ error: "UNRESOLVED_CARD" });
 
+    if (room.interaction) return cb?.({ error: "INTERACTION_ACTIVE" });
+
     const order = (room.settings.customDeckOrder?.length ? room.settings.customDeckOrder : room.deckOrder) as string[];
     const cardId = room.settings.dynamicWeighting ? pickWeightedNextCard(room) : order[room.drawIndex % order.length];
     const card = byId.get(cardId);
@@ -1001,7 +1088,7 @@ io.on("connection", (socket) => {
     const card = byId.get(cardId);
     if (!card) return cb?.({ error: "CARD_NOT_FOUND" });
 
-    if (card.resolution.kind === "chooseTarget" && !resolution.targetPlayerId) return cb?.({ error: "MISSING_TARGET" });
+    if ((card.resolution.kind === "chooseTarget" || card.resolution.kind === "rockPaperScissors") && !resolution.targetPlayerId) return cb?.({ error: "MISSING_TARGET" });
     if (card.resolution.kind === "chooseTwoTargets" && (!resolution.targetPlayerId || !resolution.targetPlayerId2))
       return cb?.({ error: "MISSING_TARGETS" });
     if (card.resolution.kind === "createRuleText" && !String(resolution.ruleText || "").trim())
@@ -1010,7 +1097,7 @@ io.on("connection", (socket) => {
     const drawer = playerName(room, playerId);
     let announce = `${drawer} resolved: ${card.title}`;
 
-    if (card.resolution.kind === "chooseTarget") {
+    if (card.resolution.kind === "chooseTarget" || card.resolution.kind === "rockPaperScissors") {
       announce = `${drawer} chose ${playerName(room, resolution.targetPlayerId)}: ${card.title}`;
     } else if (card.resolution.kind === "chooseTwoTargets") {
       announce = `${drawer} chose ${playerName(room, resolution.targetPlayerId)} and ${playerName(
@@ -1021,7 +1108,82 @@ io.on("connection", (socket) => {
       announce = `${drawer} chose ${playerName(room, resolution.targetPlayerId)}: ${card.title}`;
     }
 
-    const effectMessage = applyCard(room, card, playerId, resolution);
+    
+// ====================
+// INTERACTIVE CARDS (multi-player input)
+// ====================
+const startInteractive = () => {
+  const now = Date.now();
+
+  // Rock Paper Scissors
+  if (card.resolution.kind === "rockPaperScissors") {
+    const opponentId = String(resolution.targetPlayerId || "");
+    if (!opponentId) return cb?.({ error: "MISSING_TARGET" });
+
+    // Validate opponent is an active player in the room
+    const ap = activePlayers(room);
+    const opponent = ap.find((p: any) => p.playerId === opponentId);
+    if (!opponent) return cb?.({ error: "INVALID_TARGET" });
+    if (opponentId === playerId) return cb?.({ error: "INVALID_TARGET" });
+
+    room.currentDraw = null;
+    room.turnTimer = null;
+
+    room.interaction = {
+      kind: "rps",
+      cardId: card.id,
+      startedByPlayerId: playerId,
+      opponentPlayerId: opponentId,
+      createdAt: now,
+      expiresAt: now + 60_000,
+      choices: {}
+    };
+
+    const message = `${drawer} challenged ${playerName(room, opponentId)} to Rock Paper Scissors. Both players choose 🪨/📄/✂️ now.`;
+    pushLog(room, { type: "resolve", text: message, actorId: playerId, cardId });
+    io.to(roomCode).emit("effect:applied", { room, message });
+    io.to(roomCode).emit("room:state", { room });
+    updateRoomActivity(roomCode);
+    cb?.({ ok: true });
+    return true;
+  }
+
+  // Would You Rather (room-wide vote)
+  if (card.resolution.kind === "wouldYouRather") {
+    const lines = String(card.body || "").split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+
+    const optA = (lines.find((l) => /^a\)/i.test(l)) || lines[0] || "Option A").replace(/^a\)\s*/i, "");
+    const optB = (lines.find((l) => /^b\)/i.test(l)) || lines[1] || "Option B").replace(/^b\)\s*/i, "");
+
+    room.currentDraw = null;
+    room.turnTimer = null;
+
+    room.interaction = {
+      kind: "wyr",
+      cardId: card.id,
+      startedByPlayerId: playerId,
+      createdAt: now,
+      expiresAt: now + 75_000,
+      optionA: optA,
+      optionB: optB,
+      votes: {}
+    };
+
+    const message = `${drawer} started a Would You Rather vote. Everyone vote now. Minority drinks 1 (tie = everyone drinks 1).`;
+    pushLog(room, { type: "resolve", text: message, actorId: playerId, cardId });
+    io.to(roomCode).emit("effect:applied", { room, message });
+    io.to(roomCode).emit("room:state", { room });
+    updateRoomActivity(roomCode);
+    cb?.({ ok: true });
+    return true;
+  }
+
+  return false;
+};
+
+if (startInteractive()) return;
+
+const effectMessage = applyCard(room, card, playerId, resolution);
     applyDrinkStats(room, card, playerId, resolution);
     pushLog(room, { type: "resolve", text: `${announce}. ${effectMessage}`, actorId: playerId, cardId });
 
@@ -1078,6 +1240,82 @@ io.on("connection", (socket) => {
     cb?.({ ok: true });
   });
 
+  
+socket.on("interaction:rps:choose", ({ roomCode, playerId, choice }: { roomCode: string; playerId: string; choice: "rock" | "paper" | "scissors" }, cb) => {
+  if (!isValidRoomCode(roomCode) || !isValidPlayerId(playerId)) return cb?.({ error: "INVALID_INPUT" });
+  const room = rooms.get(roomCode);
+  if (!room) return cb?.({ error: "ROOM_NOT_FOUND" });
+  if (!room.interaction || room.interaction.kind !== "rps") return cb?.({ error: "NO_INTERACTION" });
+
+  const inter = room.interaction;
+  const a = inter.startedByPlayerId;
+  const b = inter.opponentPlayerId;
+
+  if (playerId !== a && playerId !== b) return cb?.({ error: "NOT_PARTICIPANT" });
+
+  inter.choices[playerId] = choice;
+
+  // If both chosen, resolve immediately
+  const ca = inter.choices[a];
+  const cbChoice = inter.choices[b];
+
+  const beats: Record<string, string> = { rock: "scissors", paper: "rock", scissors: "paper" };
+
+  const bumpTaken = (pid: string, n: number) => {
+    ensurePlayerStats(room, pid);
+    room.drinkStats[pid].taken += n;
+  };
+
+  if (ca && cbChoice) {
+    let message = `${playerName(room, a)} played ${emojiForRps(ca)}. ${playerName(room, b)} played ${emojiForRps(cbChoice)}.`;
+    if (ca === cbChoice) {
+      bumpTaken(a, 1);
+      bumpTaken(b, 1);
+      message += ` It's a tie — both drink 1.`;
+    } else if (beats[ca] === cbChoice) {
+      bumpTaken(b, 1);
+      message += ` ${playerName(room, b)} loses and drinks 1.`;
+    } else {
+      bumpTaken(a, 1);
+      message += ` ${playerName(room, a)} loses and drinks 1.`;
+    }
+
+    pushLog(room, { type: "system", text: message, cardId: inter.cardId });
+    room.interaction = null;
+
+    const nextPlayerId = nextTurn(room);
+    io.to(roomCode).emit("effect:applied", { room, message });
+    io.to(roomCode).emit("turn:changed", { turnIndex: room.turnIndex, playerId: nextPlayerId });
+  }
+
+  updateRoomActivity(roomCode);
+  io.to(roomCode).emit("room:state", { room });
+  cb?.({ ok: true });
+});
+
+socket.on("interaction:wyr:vote", ({ roomCode, playerId, vote }: { roomCode: string; playerId: string; vote: "A" | "B" }, cb) => {
+  if (!isValidRoomCode(roomCode) || !isValidPlayerId(playerId)) return cb?.({ error: "INVALID_INPUT" });
+  const room = rooms.get(roomCode);
+  if (!room) return cb?.({ error: "ROOM_NOT_FOUND" });
+  if (!room.interaction || room.interaction.kind !== "wyr") return cb?.({ error: "NO_INTERACTION" });
+
+  const inter = room.interaction;
+  const ap = activePlayers(room).map((p: any) => p.playerId);
+  if (!ap.includes(playerId)) return cb?.({ error: "SPECTATORS_CANNOT_VOTE" });
+
+  inter.votes[playerId] = vote;
+
+  // If all active players voted, resolve
+  const votedCount = ap.filter((pid: any) => !!inter.votes[pid]).length;
+  if (votedCount >= ap.length) {
+    finalizeWouldYouRather(room, roomCode);
+  }
+
+  updateRoomActivity(roomCode);
+  io.to(roomCode).emit("room:state", { room });
+  cb?.({ ok: true });
+});
+
   socket.on("ack:confirm", ({ roomCode, playerId, ackId }: { 
     roomCode: string; 
     playerId: string; 
@@ -1090,7 +1328,7 @@ io.on("connection", (socket) => {
     const room = rooms.get(roomCode);
     if (!room) return cb?.({ error: "ROOM_NOT_FOUND" });
 
-    const ack = room.pendingAcks.find((a) => a.ackId === ackId);
+    const ack = room.pendingAcks.find((a: any) => a.ackId === ackId);
     if (!ack) return cb?.({ error: "ACK_NOT_FOUND" });
 
     if (ack.assignedToPlayerId !== playerId) return cb?.({ error: "NOT_YOUR_ACK" });
@@ -1098,7 +1336,7 @@ io.on("connection", (socket) => {
 
     ack.status = "confirmed";
     ack.confirmedAt = Date.now();
-    room.pendingAcks = room.pendingAcks.filter((a) => a.status !== "confirmed");
+    room.pendingAcks = room.pendingAcks.filter((a: any) => a.status !== "confirmed");
     updateRoomActivity(roomCode);
 
     io.to(roomCode).emit("effect:applied", { room, message: `${playerName(room, playerId)} confirmed.` });

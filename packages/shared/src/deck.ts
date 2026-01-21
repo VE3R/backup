@@ -94,5 +94,34 @@ export const UltimateDeck: Card[] = [
   // COUNTERPLAY / JOKERS
   { id: "j1", deck: "ultimate", type: "joker", title: "Cleanse Curse", body: "Remove a curse from a player.", resolution: { kind: "chooseTarget", min: 1, max: 1 } },
   { id: "j2", deck: "ultimate", type: "joker", title: "Transfer Curse", body: "Move a curse from one player to another.", resolution: { kind: "chooseTwoTargets", min: 2, max: 2 } },
-  { id: "j3", deck: "ultimate", type: "joker", title: "Reset Roles", body: "All roles are removed.", resolution: { kind: "none" } }
+  { id: "j3", deck: "ultimate", type: "joker", title: "Reset Roles", body: "All roles are removed.", resolution: { kind: "none" } },
+
+// NEW INTERACTIVE CARDS
+  {
+    id: "e3",
+    deck: "ultimate",
+    type: "event",
+    title: "Rock Paper Scissors",
+    body: "Choose an opponent. Both of you pick 🪨 / 📄 / ✂️. Loser drinks 1 (tie = both drink 1).",
+    resolution: { kind: "rockPaperScissors", min: 1, max: 1 }
+  },
+  {
+    id: "f151",
+    deck: "ultimate",
+    type: "forfeit",
+    title: "Truth or Drink",
+    body: "Answer a truth question (from the group) or take 2 drinks.",
+    resolution: { kind: "none" }
+  },
+  {
+    id: "e4",
+    deck: "ultimate",
+    type: "event",
+    title: "Would You Rather",
+    body: `A) Always have a 1% chance to text your ex at 2am
+B) Always have a 1% chance to like someone’s 2016 photo
+Vote. Minority drinks 1 (tie = everyone drinks 1).`,
+    resolution: { kind: "wouldYouRather" }
+  }
+
 ];

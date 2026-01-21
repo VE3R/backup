@@ -59,7 +59,7 @@ function recipientMessage(room: any, ack: any) {
   const n = ack?.meta?.numberValue;
 
   // Generic messaging by resolution kind
-  if (kind === "chooseTarget") {
+  if (kind === "chooseTarget" || kind === "rockPaperScissors") {
     const txt = String(ack.cardTitle + " " + ack.instruction).toLowerCase();
     const n = Number((txt.match(/(\d+)/)?.[1] ?? "0"));
     if (txt.includes("give") && txt.includes("drink") && n) return `${giver} gave you ${n} drinks.`;
@@ -127,6 +127,11 @@ export default function RoomPage() {
 
   const [deckImportText, setDeckImportText] = useState("");
 
+  // Interactive cards
+  const [rpsChoice, setRpsChoice] = useState<"rock" | "paper" | "scissors" | null>(null);
+  const [wyrVote, setWyrVote] = useState<"A" | "B" | null>(null);
+
+
   // Connection status
   const [connected, setConnected] = useState(true);
 
@@ -146,6 +151,15 @@ export default function RoomPage() {
     const id = setInterval(() => setTick((t) => t + 1), 250);
     return () => clearInterval(id);
   }, []);
+
+
+useEffect(() => {
+  const k = room?.interaction?.kind;
+  // Reset local UI when a new interaction starts/ends
+  setRpsChoice(null);
+  setWyrVote(null);
+}, [room?.interaction?.kind, room?.interaction?.cardId, room?.interaction?.createdAt]);
+
 
   useEffect(() => {
     if (!code) return;
@@ -331,7 +345,7 @@ export default function RoomPage() {
 
     if (kind === "none") return { ok: true, resolution: {} };
 
-    if (kind === "chooseTarget") {
+    if (kind === "chooseTarget" || kind === "rockPaperScissors") {
       if (!target1) return { ok: false, error: "Pick a target player." };
       return { ok: true, resolution: { targetPlayerId: target1 } };
     }
@@ -384,6 +398,35 @@ export default function RoomPage() {
 };
   
  
+
+  
+const submitRpsChoice = (choice: "rock" | "paper" | "scissors") => {
+  if (!room || !playerId) return;
+  const socket = getSocket();
+  sfx.click();
+  setRpsChoice(choice);
+  socket.emit("interaction:rps:choose", { roomCode: room.roomCode, playerId, choice }, (res: any) => {
+    if (res?.error) {
+      sfx.error();
+      toast({ kind: "error", title: "RPS failed", message: String(res.error) });
+      setRpsChoice(null);
+    }
+  });
+};
+
+const submitWyrVote = (vote: "A" | "B") => {
+  if (!room || !playerId) return;
+  const socket = getSocket();
+  sfx.click();
+  setWyrVote(vote);
+  socket.emit("interaction:wyr:vote", { roomCode: room.roomCode, playerId, vote }, (res: any) => {
+    if (res?.error) {
+      sfx.error();
+      toast({ kind: "error", title: "Vote failed", message: String(res.error) });
+      setWyrVote(null);
+    }
+  });
+};
 
   const resolve = () => {
     if (!room || !playerId || !card) return;
@@ -997,6 +1040,153 @@ export default function RoomPage() {
           </motion.div>
         )}
       </AnimatePresence>
+
+
+{/* Interaction Modal */}
+<AnimatePresence>
+  {room?.interaction && (
+    <motion.div
+      className="fixed inset-0 z-[70] flex items-center justify-center p-4"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+    >
+      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
+
+      <motion.div
+        className="relative w-full max-w-xl rounded-3xl border border-white/10 bg-[#0b0c0d] p-5 shadow-[0_40px_120px_rgba(0,0,0,0.7)]"
+        initial={{ y: 18, scale: 0.98, opacity: 0 }}
+        animate={{ y: 0, scale: 1, opacity: 1 }}
+        exit={{ y: 18, scale: 0.98, opacity: 0 }}
+        transition={{ type: "spring", stiffness: 520, damping: 40 }}
+      >
+        {room.interaction.kind === "rps" ? (
+          (() => {
+            const a = room.interaction.startedByPlayerId;
+            const b = room.interaction.opponentPlayerId;
+            const meIsParticipant = playerId === a || playerId === b;
+            const opponentId = playerId === a ? b : a;
+            const mePicked = !!room.interaction.choices?.[playerId || ""];
+            const opponentPicked = !!room.interaction.choices?.[opponentId || ""];
+            const meChoice = room.interaction.choices?.[playerId || ""] as any;
+
+            return (
+              <div>
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <div className="text-lg font-semibold">Rock Paper Scissors</div>
+                    <div className="text-sm text-white/60 mt-1">
+                      {playerId === a
+                        ? `You challenged ${room.players.find((p: any) => p.playerId === b)?.name || "opponent"}`
+                        : `You were challenged by ${room.players.find((p: any) => p.playerId === a)?.name || "someone"}`}
+                    </div>
+                  </div>
+                  <Tag>rps</Tag>
+                </div>
+
+                {!meIsParticipant ? (
+                  <div className="mt-4 text-sm text-white/70">Spectating — waiting for them to choose.</div>
+                ) : (
+                  <div className="mt-5 space-y-3">
+                    <div className="text-sm text-white/70">
+                      Pick one. Choices are hidden until both select.
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-3">
+                      <Button
+                        variant={meChoice === "rock" ? "primary" : "secondary"}
+                        onClick={() => submitRpsChoice("rock")}
+                        disabled={mePicked}
+                      >
+                        🪨 Rock
+                      </Button>
+                      <Button
+                        variant={meChoice === "paper" ? "primary" : "secondary"}
+                        onClick={() => submitRpsChoice("paper")}
+                        disabled={mePicked}
+                      >
+                        📄 Paper
+                      </Button>
+                      <Button
+                        variant={meChoice === "scissors" ? "primary" : "secondary"}
+                        onClick={() => submitRpsChoice("scissors")}
+                        disabled={mePicked}
+                      >
+                        ✂️ Scissors
+                      </Button>
+                    </div>
+
+                    <div className="text-xs text-white/60">
+                      Status: you {mePicked ? "picked" : "haven't picked"} • opponent{" "}
+                      {opponentPicked ? "picked" : "hasn't picked"}.
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })()
+        ) : room.interaction.kind === "wyr" ? (
+          (() => {
+            const ap = (room.players || []).filter((p: any) => p.mode !== "spectator");
+            const myIsPlayer = ap.some((p: any) => p.playerId === playerId);
+            const v = room.interaction.votes?.[playerId || ""] as any;
+
+            return (
+              <div>
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <div className="text-lg font-semibold">Would You Rather</div>
+                    <div className="text-sm text-white/60 mt-1">Vote. Minority drinks (tie = everyone drinks).</div>
+                  </div>
+                  <Tag>vote</Tag>
+                </div>
+
+                <div className="mt-4 space-y-3">
+                  <div className="rounded-2xl border border-white/10 bg-black/30 p-4">
+                    <div className="text-sm font-semibold">A</div>
+                    <div className="text-sm text-white/80 mt-1">{room.interaction.optionA}</div>
+                  </div>
+
+                  <div className="rounded-2xl border border-white/10 bg-black/30 p-4">
+                    <div className="text-sm font-semibold">B</div>
+                    <div className="text-sm text-white/80 mt-1">{room.interaction.optionB}</div>
+                  </div>
+
+                  {!myIsPlayer ? (
+                    <div className="text-sm text-white/70">Spectating — players are voting.</div>
+                  ) : (
+                    <div className="grid grid-cols-2 gap-3">
+                      <Button
+                        variant={v === "A" ? "primary" : "secondary"}
+                        onClick={() => submitWyrVote("A")}
+                        disabled={!!v}
+                      >
+                        Vote A
+                      </Button>
+                      <Button
+                        variant={v === "B" ? "primary" : "secondary"}
+                        onClick={() => submitWyrVote("B")}
+                        disabled={!!v}
+                      >
+                        Vote B
+                      </Button>
+                    </div>
+                  )}
+
+                  <div className="text-xs text-white/60">
+                    Votes in:{" "}
+                    {ap.filter((p: any) => !!room.interaction.votes?.[p.playerId]).length}/{ap.length}
+                  </div>
+                </div>
+              </div>
+            );
+          })()
+        ) : null}
+      </motion.div>
+    </motion.div>
+  )}
+</AnimatePresence>
+
 
       <ResolveModal
         open={resolverOpen}

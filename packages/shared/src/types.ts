@@ -4,7 +4,9 @@ export type CardResolution =
   | { kind: "chooseNumber"; min: number; max: number }
   | { kind: "chooseTargetAndNumber"; numMin: number; numMax: number }
   | { kind: "chooseTwoTargets"; min: 2; max: 2 }
-  | { kind: "createRuleText"; maxLen: number };
+  | { kind: "createRuleText"; maxLen: number }
+  | { kind: "rockPaperScissors"; min: 1; max: 1 }
+  | { kind: "wouldYouRather" };
 
 export type CardType =
   | "forfeit"
@@ -95,6 +97,30 @@ export type ActiveEffects = {
   currentEvent: { id: string; title: string } | null;
 };
 
+
+export type RockPaperScissorsChoice = "rock" | "paper" | "scissors";
+
+export type RoomInteraction =
+  | {
+      kind: "rps";
+      cardId: string;
+      startedByPlayerId: string;
+      opponentPlayerId: string;
+      createdAt: number;
+      expiresAt: number;
+      choices: Partial<Record<string, RockPaperScissorsChoice>>;
+    }
+  | {
+      kind: "wyr";
+      cardId: string;
+      startedByPlayerId: string;
+      createdAt: number;
+      expiresAt: number;
+      optionA: string;
+      optionB: string;
+      votes: Partial<Record<string, "A" | "B">>;
+    };
+
 export type RoomState = {
   roomCode: string;
   deckId: "ultimate";
@@ -109,6 +135,8 @@ export type RoomState = {
   activeEffects: ActiveEffects;
   turnTimer: TurnTimer | null;
   log: RoomLogItem[];
+
+  interaction?: RoomInteraction | null;
 
   // Multiplayer UX extras
   pendingAcks?: PendingAck[];

@@ -67,7 +67,7 @@ export function ResolveModal(p: Props) {
               </div>
 
               <div className="mt-5 space-y-4">
-                {(kind === "chooseTarget" || kind === "chooseTargetAndNumber") && (
+                {(kind === "chooseTarget" || kind === "chooseTargetAndNumber" || kind === "rockPaperScissors") && (
                   <div>
                     <div className="text-xs text-white/60 mb-2">Target player</div>
                     <Select value={p.target1} onChange={p.setTarget1}>

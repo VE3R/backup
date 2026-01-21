@@ -11,6 +11,7 @@ export function computeTimer(card: Card) {
 
   switch (card.resolution.kind) {
     case "chooseTarget": seconds += 10; break;
+    case "rockPaperScissors": seconds += 10; break;
     case "chooseNumber": seconds += 10; break;
     case "chooseTargetAndNumber": seconds += 20; break;
     case "chooseTwoTargets": seconds += 25; break;
